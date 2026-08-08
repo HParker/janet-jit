@@ -34,11 +34,27 @@ uint64_t jit_make_array() {
   return janet_u64(a);
 }
 
+uint64_t jit_make_tuple() {
+  JanetTuple t = janet_tuple_n(call_argv, call_argc);
+  Janet tup = janet_wrap_tuple(t);
+  call_argc = 0;
+  return janet_u64(tup);
+}
+
+uint64_t jit_make_bracket_tuple() {
+  JanetTuple t = janet_tuple_n(call_argv, call_argc);
+  janet_tuple_flag(t) |= JANET_TUPLE_FLAG_BRACKETCTOR;
+  Janet tup = janet_wrap_tuple(t);
+  call_argc = 0;
+  return janet_u64(tup);
+}
+
 uint64_t jit_make_buffer() {
   JanetBuffer *b = janet_buffer(call_argc * 10);
   for (int i = 0; i < call_argc; i++) {
     janet_to_string_b(b, call_argv[i]);
   }
+  call_argc = 0;
   return janet_u64(janet_wrap_buffer(b));
 }
 
@@ -47,9 +63,35 @@ uint64_t jit_make_string() {
   for (int i = 0; i < call_argc; i++) {
     janet_to_string_b(b, call_argv[i]);
   }
+  call_argc = 0;
   // TODO: this leaves a garbage buffer we can potentially skip
   return janet_u64(janet_stringv(b->data, b->count));
 }
+
+uint64_t jit_make_table() {
+  if (call_argc & 1) {
+    janet_panicf("expected even number of arguments to table constructor, got %d", call_argc);
+  }
+  JanetTable *tab = janet_table(call_argc / 2);
+  for (int i = 0; i < call_argc; i += 2) {
+    janet_table_put(tab, call_argv[i], call_argv[i + 1]);
+  }
+  call_argc = 0;
+  return janet_u64(janet_wrap_table(tab));
+}
+
+uint64_t jit_make_struct() {
+  if (call_argc & 1) {
+    janet_panicf("expected even number of arguments to struct constructor, got %d", call_argc);
+  }
+  JanetKV *st = janet_struct_begin(call_argc / 2);
+  for (int i = 0; i < call_argc; i += 2) {
+    janet_struct_put(st, call_argv[i], call_argv[i + 1]);
+  }
+  call_argc = 0;
+  return janet_u64(janet_wrap_struct(janet_struct_end(st)));
+}
+
 
 void jit_push(Janet value) {
   if (call_argv == NULL) {
@@ -921,7 +963,6 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_u32(code, a * sizeof(Janet)); // stack location
     break;
   case JOP_MAKE_ARRAY:
-    // call jit_make_array with no args
     // go back to the interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
@@ -935,8 +976,35 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0x24);
     emit_u32(code, a * sizeof(Janet)); // stack location
     break;
+  case JOP_MAKE_TUPLE:
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_make_tuple);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // store return value
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet)); // stack location
+    break;
+  case JOP_MAKE_BRACKET_TUPLE:
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_make_bracket_tuple);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // store return value
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet)); // stack location
+    break;
   case JOP_MAKE_BUFFER:
-    // call jit_make_array with no args
     // go back to the interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
@@ -951,7 +1019,6 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_u32(code, a * sizeof(Janet)); // stack location
     break;
   case JOP_MAKE_STRING:
-    // call jit_make_array with no args
     // go back to the interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
@@ -965,11 +1032,35 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0x24);
     emit_u32(code, a * sizeof(Janet)); // stack location
     break;
-  /* case JOP_MAKE_STRUCT: */
-  /* case JOP_MAKE_TABLE: */
-  /* case JOP_MAKE_TUPLE: */
-  /* case JOP_MAKE_BRACKET_TUPLE: */
-  /* case JOP_GREATER_THAN_EQUAL: */
+  case JOP_MAKE_STRUCT:
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_make_struct);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // store return value
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet)); // stack location
+    break;
+  case JOP_MAKE_TABLE:
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_make_table);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // store return value
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet)); // stack location
+    break;
+    /* case JOP_GREATER_THAN_EQUAL: */
   /* case JOP_LESS_THAN_EQUAL: */
   /* case JOP_NEXT: */
   /* case JOP_NOT_EQUALS: */
@@ -995,7 +1086,8 @@ int jitted_compile(JittedFunction *jitted, JanetFunction *fn) {
     256
   };
 
-  int stack_size = (arity + def_slots) * sizeof(Janet);
+  int def_size = def_slots * sizeof(Janet);
+  int stack_size = ((def_size + 8 + 15) & ~15) - 8;
 
   if (stack_size > 0) {
     // stack adjust
