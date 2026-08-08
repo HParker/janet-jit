@@ -28,6 +28,29 @@ uint64_t jit_call(Janet callee) {
   return result;
 }
 
+uint64_t jit_make_array() {
+  Janet a = janet_wrap_array(janet_array_n(call_argv, call_argc));
+  call_argc = 0;
+  return janet_u64(a);
+}
+
+uint64_t jit_make_buffer() {
+  JanetBuffer *b = janet_buffer(call_argc * 10);
+  for (int i = 0; i < call_argc; i++) {
+    janet_to_string_b(b, call_argv[i]);
+  }
+  return janet_u64(janet_wrap_buffer(b));
+}
+
+uint64_t jit_make_string() {
+  JanetBuffer *b = janet_buffer(call_argc * 10);
+  for (int i = 0; i < call_argc; i++) {
+    janet_to_string_b(b, call_argv[i]);
+  }
+  // TODO: this leaves a garbage buffer we can potentially skip
+  return janet_u64(janet_stringv(b->data, b->count));
+}
+
 void jit_push(Janet value) {
   if (call_argv == NULL) {
     call_argv = malloc(8 * sizeof(Janet));
@@ -148,7 +171,8 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
   int a = (instr >> 8) & 0xFF;
   int b = (instr >> 16) & 0xFF;
   int c = (instr >> 24) & 0xFF;
-  int32_t immediate = (int32_t)instr >> 16;
+  int32_t imm = (int32_t)instr >> 16;
+  int32_t imm8 = (int32_t)instr >> 24;
   uint32_t d = (uint32_t)instr >> 8;
   uint32_t e = (uint32_t)instr >> 16;
 
@@ -212,16 +236,18 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     // imm -> rax
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(immediate)));
+    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
     emit_byte(code, 0x6E);
     emit_byte(code, 0xC0 + (1 << 3));
     // +
     emit_binary_op(code, 0x58, a, 0, 1);
     // lhs -> rsp + offset
     emit_xmm_to_stack(code, a, 0);
+    break;
   case JOP_ADD:
     // lhs -> xmm0
     emit_stack_to_xmm(code, 0, b);
@@ -238,16 +264,18 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     // imm -> rax
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(immediate)));
+    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
     emit_byte(code, 0x6E);
     emit_byte(code, 0xC0 + (1 << 3));
     // +
     emit_binary_op(code, 0x5C, a, 0, 1);
     // lhs -> rsp + offset
     emit_xmm_to_stack(code, a, 0);
+    break;
   case JOP_SUBTRACT:
     // lhs -> xmm0
     emit_stack_to_xmm(code, 0, b);
@@ -264,16 +292,18 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     // imm -> rax
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(immediate)));
+    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
     emit_byte(code, 0x6E);
     emit_byte(code, 0xC0 + (1 << 3));
     // +
     emit_binary_op(code, 0x59, a, 0, 1);
     // lhs -> rsp + offset
     emit_xmm_to_stack(code, a, 0);
+    break;
   case JOP_MULTIPLY:
     // lhs -> xmm0
     emit_stack_to_xmm(code, 0, b);
@@ -290,16 +320,18 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     // imm -> rax
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(immediate)));
+    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
     emit_byte(code, 0x6E);
     emit_byte(code, 0xC0 + (1 << 3));
     // +
     emit_binary_op(code, 0x5E, a, 0, 1);
     // lhs -> rsp + offset
     emit_xmm_to_stack(code, a, 0);
+    break;
   case JOP_DIVIDE:
     // lhs -> xxm0
     emit_stack_to_xmm(code, 0, b);
@@ -390,6 +422,7 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0x0F);
     emit_byte(code, 0x2A);
     emit_byte(code, 0xC0);
+    // xmm0 -> rsi + offset
     emit_xmm_to_stack(code, a, 0);
     break;
   case JOP_BXOR:
@@ -409,13 +442,109 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0xC0);
     emit_xmm_to_stack(code, a, 0);
     break;
-  /* case JOP_BNOT: */
-  /* case JOP_SHIFT_LEFT: */
-  /* case JOP_SHIFT_LEFT_IMMEDIATE: */
-  /* case JOP_SHIFT_RIGHT: */
-  /* case JOP_SHIFT_RIGHT_IMMEDIATE: */
-  /* case JOP_SHIFT_RIGHT_UNSIGNED: */
-  /* case JOP_SHIFT_RIGHT_UNSIGNED_IMMEDIATE: */
+  case JOP_BNOT:
+    // e = value
+    // value -> RAX
+    emit_stack_to_gpr(code, 0, e);
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xF7);
+    emit_byte(code, 0xD0); // NOT
+
+    // rax -> xxm0
+    emit_byte(code, 0xF2);
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2A);
+    emit_byte(code, 0xC0);
+    // xmm0 -> rsi + offset
+    emit_xmm_to_stack(code, a, 0);
+    break;
+  case JOP_SHIFT_LEFT:
+    emit_stack_to_gpr(code, 0, b);
+    emit_stack_to_gpr(code, 1, c);
+    // blshift
+    emit_byte(code, 0xD3);
+    emit_byte(code, 0xE0);
+    // rax -> xmm0
+    emit_byte(code, 0xF2);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2A);
+    emit_byte(code, 0xC0);
+    // xmm0 -> stack
+    emit_xmm_to_stack(code, a, 0);
+    break;
+  case JOP_SHIFT_LEFT_IMMEDIATE:
+    emit_stack_to_gpr(code, 0, b);
+    // shift
+    emit_byte(code, 0xD3);
+    emit_byte(code, 0xE0);
+    emit_byte(code, c);
+    // rax -> xmm0
+    emit_byte(code, 0xF2);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2A);
+    emit_byte(code, 0xC0);
+    // xmm0 -> stack
+    emit_xmm_to_stack(code, a, 0);
+    break;
+  case JOP_SHIFT_RIGHT:
+    emit_stack_to_gpr(code, 0, b);
+    emit_stack_to_gpr(code, 1, c);
+    // brshift
+    emit_byte(code, 0xD3);
+    emit_byte(code, 0xF8);
+    // rax -> xmm0
+    emit_byte(code, 0xF2);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2A);
+    emit_byte(code, 0xC0);
+    // xmm0 -> stack
+    emit_xmm_to_stack(code, a, 0);
+    break;
+  case JOP_SHIFT_RIGHT_IMMEDIATE:
+    emit_stack_to_gpr(code, 0, b);
+    // shift
+    emit_byte(code, 0xD3);
+    emit_byte(code, 0xF8);
+    emit_byte(code, c);
+    // rax -> xmm0
+    emit_byte(code, 0xF2);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2A);
+    emit_byte(code, 0xC0);
+    // xmm0 -> stack
+    emit_xmm_to_stack(code, a, 0);
+    break;
+  case JOP_SHIFT_RIGHT_UNSIGNED:
+    emit_stack_to_gpr(code, 0, b);
+    emit_stack_to_gpr(code, 1, c);
+    // brshift
+    emit_byte(code, 0xD3);
+    emit_byte(code, 0xF8);
+    // rax -> xmm0
+    emit_byte(code, 0xF2);
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2A);
+    emit_byte(code, 0xC0);
+    // xmm0 -> stack
+    emit_xmm_to_stack(code, a, 0);
+    break;
+  case JOP_SHIFT_RIGHT_UNSIGNED_IMMEDIATE:
+    emit_stack_to_gpr(code, 0, b);
+    // shift
+    emit_byte(code, 0xD3);
+    emit_byte(code, 0xF8);
+    emit_byte(code, c);
+    // rax -> xmm0
+    emit_byte(code, 0xF2);
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2A);
+    emit_byte(code, 0xC0);
+    // xmm0 -> stack
+    emit_xmm_to_stack(code, a, 0);
+    break;
   /* case JOP_MOVE_FAR: */
   /* case JOP_MOVE_NEAR: */
   /* case JOP_JUMP: */
@@ -429,7 +558,34 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
   /* case JOP_LESS_THAN_IMMEDIATE: */
   /* case JOP_EQUALS: */
   /* case JOP_EQUALS_IMMEDIATE: */
-  /* case JOP_COMPARE: */
+  case JOP_COMPARE:
+    // TODO: this can also probably have a fast path
+    // b = lhs c = rhs
+    // lhs 7 (first arg)
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (7 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, b * sizeof(Janet));
+    // rhs 6 (second arg)
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (6 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, c * sizeof(Janet));
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)janet_compare);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // store return value (as int)
+    emit_byte(code, 0xF2);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2A);
+    emit_byte(code, 0xC0);
+    emit_xmm_to_stack(code, a, 0);
+    break;
   case JOP_LOAD_NIL:
     // load to rax, immediate
     emit_byte(code, 0x48);
@@ -441,7 +597,7 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0x89);
     emit_byte(code, 0x84);
     emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_u32(code, d * sizeof(Janet));
     break;
   case JOP_LOAD_TRUE:
     // load to rax, immediate
@@ -454,7 +610,7 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0x89);
     emit_byte(code, 0x84);
     emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_u32(code, d * sizeof(Janet));
     break;
   case JOP_LOAD_FALSE:
     // load to rax, immediate
@@ -467,13 +623,13 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0x89);
     emit_byte(code, 0x84);
     emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_u32(code, d * sizeof(Janet));
     break;
   case JOP_LOAD_INTEGER:
     // load to rax, immediate
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(immediate)));
+    emit_u64(code, janet_u64(janet_wrap_integer(imm)));
 
     // mov rsp + offset, rax
     emit_byte(code, 0x48);
@@ -507,7 +663,7 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0x89);
     emit_byte(code, 0x84);
     emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_u32(code, d * sizeof(Janet));
     break;
   case JOP_SET_UPVALUE:
     janet_panic("janet's set upvalue opcode is not supported");
@@ -675,11 +831,9 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0x24);
     emit_u32(code, b * sizeof(Janet));
     // key (6)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (6 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, c * sizeof(Janet));
+    // c immidiate (6)
+    emit_byte(code, 0xBE);
+    emit_u32(code, c);
     // go back to the interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
@@ -694,17 +848,23 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_u32(code, a * sizeof(Janet)); // stack location
     break;
   case JOP_PUT:
-    // b = collection, c = key
+    // a = collection, b = key, c = val
     // collection arg 1 (7)
     emit_byte(code, 0x48);
     emit_byte(code, 0x8B);
     emit_byte(code, 0x84 + (7 << 3));
     emit_byte(code, 0x24);
-    emit_u32(code, b * sizeof(Janet));
+    emit_u32(code, a * sizeof(Janet));
     // key (6)
     emit_byte(code, 0x48);
     emit_byte(code, 0x8B);
     emit_byte(code, 0x84 + (6 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, b * sizeof(Janet));
+    // val (2)
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (2 << 3));
     emit_byte(code, 0x24);
     emit_u32(code, c * sizeof(Janet));
     // go back to the interpreter
@@ -715,19 +875,25 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0xD0);
     break;
   case JOP_PUT_INDEX:
-    // b = collection, c = key
+    // a = collection, c = key b = value
     // collection arg 1 (7)
     emit_byte(code, 0x48);
     emit_byte(code, 0x8B);
     emit_byte(code, 0x84 + (7 << 3));
     emit_byte(code, 0x24);
-    emit_u32(code, b * sizeof(Janet));
-    // key (6)
+    emit_u32(code, a * sizeof(Janet));
+
+    // c immidiate (6)
+    emit_byte(code, 0xBE);
+    emit_u32(code, c);
+
+    // val (2)
     emit_byte(code, 0x48);
     emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (6 << 3));
+    emit_byte(code, 0x84 + (2 << 3));
     emit_byte(code, 0x24);
-    emit_u32(code, c * sizeof(Janet));
+    emit_u32(code, b * sizeof(Janet));
+
     // go back to the interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
@@ -754,9 +920,51 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0x24);
     emit_u32(code, a * sizeof(Janet)); // stack location
     break;
-  /* case JOP_MAKE_ARRAY: */
-  /* case JOP_MAKE_BUFFER: */
-  /* case JOP_MAKE_STRING: */
+  case JOP_MAKE_ARRAY:
+    // call jit_make_array with no args
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_make_array);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // store return value
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet)); // stack location
+    break;
+  case JOP_MAKE_BUFFER:
+    // call jit_make_array with no args
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_make_buffer);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // store return value
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet)); // stack location
+    break;
+  case JOP_MAKE_STRING:
+    // call jit_make_array with no args
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_make_string);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // store return value
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet)); // stack location
+    break;
   /* case JOP_MAKE_STRUCT: */
   /* case JOP_MAKE_TABLE: */
   /* case JOP_MAKE_TUPLE: */

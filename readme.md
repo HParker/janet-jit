@@ -15,11 +15,13 @@ Right now it only target System V x86 with nanboxed janet values. I would love t
 (lerp-jit 1 20 0.3) # call just like usual, but will compile to binary on first call.
 ```
 
-## Notable gaps
+## Notable Differences
 
 Jit generated code has less strict garantees about correctness and errors than the interpreter. It expects that you basically pass it correct expected code.
 
-In Janet `(+ "hi" 1)` raises an error, under the JIT, this should be treated as undefined behavior. On my machine this returns "hi", but that may change at any time. This leads to a more useful JIT that doesn't have to generate much error checking.
+In Janet `(+ "hi" 1)` raises an error, under the JIT, this should be treated as undefined behavior. On my machine this returns "hi", but that may change at any time. This leads to a more useful JIT that doesn't have to generate much error checking. also, `(mod x 0)` returns `-nan`.
+
+
 
 There are also a number of operations the VM can do that the JIT today does not support. They mostly have to do with VM state and probably make bad candidates for the JIT anyways. Today the list of unsupported ops is:
 
@@ -30,9 +32,10 @@ There are also a number of operations the VM can do that the JIT today does not 
 - (prop) propagate
 - (clo) closure
 
-Operations that fall back to the interpreter, but return to the JIT:
+Operations that fall back to the interpreter, will use the JIT:
 
 - push
+- compare
 - call
 - in
 - get
@@ -40,7 +43,12 @@ Operations that fall back to the interpreter, but return to the JIT:
 - set
 - setindex
 - length
-
+- make array
+- make tuple
+- make buffer
+- make string
+- make table
+- make struct
 
 ## Other things
 
