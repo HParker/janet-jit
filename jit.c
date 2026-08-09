@@ -14,6 +14,13 @@ typedef Janet (*JitFn)(int32_t argc, Janet *argv);
 size_t call_argc = 0;
 Janet *call_argv = NULL;
 
+uint64_t jit_typecheck(Janet val, uint32_t types) {
+  if (!janet_checktypes(val, types)) {
+    janet_panicf("expected %T, got %v", types, val);
+  }
+}
+
+
 // jit helpers called form emitted assembly
 uint64_t jit_in(Janet collection, Janet key) {
   // TODO: this one can maybe get a assembly fast path
@@ -238,7 +245,23 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, int pc, uint32
     emit_byte(code, 0xFF);
     emit_byte(code, 0xD0);
     break;
-    /* case JOP_TYPECHECK: */
+  case JOP_TYPECHECK:
+    // a = slot e = type(s)
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (7 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    // immediate type number
+    emit_byte(code, 0xBE);
+    emit_u32(code, c);
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_typecheck);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    break;
   case JOP_RETURN:
     // mov rax, rsp + offset
     emit_byte(code, 0x48);
@@ -386,7 +409,22 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, int pc, uint32
     // lhs -> rsp + offset
     emit_xmm_to_stack(code, a, 0);
     break;
-  /* case JOP_DIVIDE_FLOOR: */
+  case JOP_DIVIDE_FLOOR:
+    // lhs -> xxm0
+    emit_stack_to_xmm(code, 0, b);
+    // rhs -> xxm1
+    emit_stack_to_xmm(code, 1, c);
+    emit_binary_op(code, 0x5E, a, 0, 1);
+    // floor(xmm0)
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x3A);
+    emit_byte(code, 0x0B);
+    emit_byte(code, 0xC0 + (0 << 3) + 0);
+    emit_byte(code, 0x01); // <- round instead of trunc
+    // lhs -> rsp + offset
+    emit_xmm_to_stack(code, a, 0);
+    break;
   case JOP_MODULO:
     // a - truncate(a / b) * b
     // a -> xmm0
@@ -599,10 +637,8 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, int pc, uint32
     emit_xmm_to_stack(code, a, 0);
     break;
   case JOP_JUMP:
-    int jump_target = pc + d;
     emit_byte(code, 0xE9);
     // location to patch in the 32bit destination
-
     code->jump_targets[code->jump_index] = pc + ((int32_t)instr >> 8);
     code->jump_locations[code->jump_index] = code->count;
     code->jump_index++;
@@ -949,6 +985,95 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, int pc, uint32
     emit_byte(code, 0xB8);
     emit_u64(code, janet_u64(janet_wrap_false()));
      // OR RAX, RDX
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x09);
+    emit_byte(code, 0xD0);
+    // RAX -> stack + offset
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    break;
+  case JOP_NOT_EQUALS:
+    emit_stack_to_xmm(code, 0, b);
+    emit_stack_to_xmm(code, 1, c);
+    // TODO: use this in JOP_COMPARE
+    // ucomisd left, right sets ZF when equal and PF when either value is NaN
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // set AL based on result of comparison
+    // AL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x95); // SETNE
+    emit_byte(code, 0xC0); // AL
+    // DL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9B); // SETNP - make nan not equal
+    emit_byte(code, 0xC2); // DL
+    // (and al dl)
+    emit_byte(code, 0x20);
+    emit_byte(code, 0xD0);
+    // store al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD0); // MOVZX EDX, AL.
+    // false -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_false()));
+     // OR RAX, RDX
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x09);
+    emit_byte(code, 0xD0);
+    // RAX -> stack + offset
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    break;
+  case JOP_NOT_EQUALS_IMMEDIATE:
+    emit_stack_to_xmm(code, 0, b);
+    // imm -> rax -> xmm1
+    // imm -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    // rax -> imm1
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x6E);
+    emit_byte(code, 0xC0 + (1 << 3));
+    // ucomisd left, right sets ZF when equal and PF when either value is NaN
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // set AL based on result of comparison
+    // AL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x95); // SETNE
+    emit_byte(code, 0xC0); // AL
+    // DL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9B); // SETNP - make nan not equal
+    emit_byte(code, 0xC2); // DL
+    // (and al dl)
+    emit_byte(code, 0x20);
+    emit_byte(code, 0xD0);
+    // store al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD0); // MOVZX EDX, AL.
+    // false -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_false()));
+    // OR RAX, RDX
     emit_byte(code, 0x48);
     emit_byte(code, 0x09);
     emit_byte(code, 0xD0);
@@ -1465,9 +1590,33 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, int pc, uint32
     emit_byte(code, 0x24);
     emit_u32(code, a * sizeof(Janet)); // stack location
     break;
-  /* case JOP_NEXT: */
-  /* case JOP_NOT_EQUALS: */
-  /* case JOP_NOT_EQUALS_IMMEDIATE: */
+  case JOP_NEXT:
+    // b = collection, c = key
+    // collection arg 1 (7)
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (7 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, b * sizeof(Janet));
+    // key (6)
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (6 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, c * sizeof(Janet));
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)janet_next);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // store return value
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet)); // stack location
+    break;
   case JOP_CANCEL:
     janet_panic("janet's cancel opcode is not supported");
     break;
