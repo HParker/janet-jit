@@ -127,6 +127,9 @@ typedef struct {
   uint8_t *data;
   size_t count;
   size_t capacity;
+  int *jump_targets;
+  int *jump_locations;
+  int jump_index;
 } CodeBuffer;
 
 static int jitted_function_gc(void *p, size_t size) {
@@ -206,7 +209,7 @@ static void emit_binary_op(CodeBuffer *code, uint8_t op, uint32_t dest, uint32_t
   emit_byte(code, 0xC0 + (lhs << 3) + rhs);
 }
 
-static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr, int stack_size) {
+static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, int pc, uint32_t instr, int stack_size) {
   // TODO: these can be #define/macros, but this is fine for now
   Janet *constants = fn->def->constants;
   int opcode = instr & 0xFF;
@@ -587,9 +590,24 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     // xmm0 -> stack
     emit_xmm_to_stack(code, a, 0);
     break;
-  /* case JOP_MOVE_FAR: */
-  /* case JOP_MOVE_NEAR: */
-  /* case JOP_JUMP: */
+  case JOP_MOVE_FAR:
+    emit_stack_to_xmm(code, 0, a);
+    emit_xmm_to_stack(code, e, 0);
+    break;
+  case JOP_MOVE_NEAR:
+    emit_stack_to_xmm(code, 0, e);
+    emit_xmm_to_stack(code, a, 0);
+    break;
+  case JOP_JUMP:
+    int jump_target = pc + d;
+    emit_byte(code, 0xE9);
+    // location to patch in the 32bit destination
+
+    code->jump_targets[code->jump_index] = pc + ((int32_t)instr >> 8);
+    code->jump_locations[code->jump_index] = code->count;
+    code->jump_index++;
+    emit_u32(code, 0);
+    break;
   /* case JOP_JUMP_IF: */
   /* case JOP_JUMP_IF_NOT: */
   /* case JOP_JUMP_IF_NIL: */
@@ -1468,7 +1486,10 @@ int jitted_compile(JittedFunction *jitted, JanetFunction *fn) {
   CodeBuffer code = {
     malloc(256 * sizeof(uint8_t)),
     0,
-    256
+    256,
+    malloc(256 * sizeof(uint32_t)),
+    malloc(256 * sizeof(uint32_t)),
+    0
   };
 
   int def_size = def_slots * sizeof(Janet);
@@ -1492,17 +1513,31 @@ int jitted_compile(JittedFunction *jitted, JanetFunction *fn) {
     emit_u32(&code, offset);
 
     // RAX -> stack + offset
-    emit_byte(&code, 0x48);   // REX.W: move all 64 bits.
-    emit_byte(&code, 0x89);   // MOV r64 into r/m64.
-    emit_byte(&code, 0x84);   // ModR/M: disp32 address, source RAX, SIB follows.
-    emit_byte(&code, 0x24);   // SIB: scale 1, no index, base RSP.
-    emit_u32(&code, offset);  // disp32: byte offset of the Janet VM slot.
+    emit_byte(&code, 0x48);
+    emit_byte(&code, 0x89);
+    emit_byte(&code, 0x84);
+    emit_byte(&code, 0x24);
+    emit_u32(&code, offset);
   }
 
+  int *instruction_byte_locations = malloc(bc_len * sizeof(int));
   // copile bytecode
   for (int i = 0; i < bc_len; i++) {
-    compile_bytecode(&code, fn, def->bytecode[i], stack_size);
+    instruction_byte_locations[i] = code.count;
+    compile_bytecode(&code, fn, i, def->bytecode[i], stack_size);
   }
+
+  // patch jumps
+  for (int i = 0; i < code.jump_index; i++) {
+    int dest = instruction_byte_locations[code.jump_targets[i]];
+
+    int distance = dest - (code.jump_locations[i] + 4);
+    for (int shift = 0; shift < 32; shift += 8) {
+      code.data[code.jump_locations[i] + shift / 8] = (distance >> shift);
+    }
+  }
+
+
 
   void * mapping = mmap(NULL,
 			code.count,
