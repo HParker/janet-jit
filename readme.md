@@ -1,4 +1,4 @@
-# (janet-jit (fn []))
+# (jit/jitable (fn []))
 
 Small callable Janet Jit. You tell the jit what functions to compile
 and it compiles them on next call. The jit makes a huge number of
@@ -42,16 +42,24 @@ jpm build
 
 ```
 $ jpm build && janet benchmarks/microbench.janet
-------------------------------------------------------------------------
-| name | interpreter ips | interpreter elapsed | jit ips | jit elapsed | times faster |
-| lerp | 30076163.6578 ips | 3.3249 ellapsed | 55391189.6168 ips | 1.8053 ellapsed  | 1.84x faster |
-| fade | 15188307.3811 ips | 6.5840 ellapsed | 40022490.8151 ips | 2.4986 ellapsed  | 2.64x faster |
-| dot  | 26054360.3505 ips | 3.8381 ellapsed | 55481671.7551 ips | 1.8024 ellapsed  | 2.13x faster |
-| in   | 29014488.2883 ips | 3.4466 ellapsed | 50005290.6583 ips | 1.9998 ellapsed  | 1.72x faster |
-| get  | 25627316.2686 ips | 3.9021 ellapsed | 49932067.1727 ips | 2.0027 ellapsed  | 1.95x faster |
-| cmp  | 27714058.1696 ips | 3.6083 ellapsed | 61109278.8144 ips | 1.6364 ellapsed  | 2.20x faster |
-------------------------------------------------------------------------
 ```
+
+-------------------------------------------------------------------------------------------------------------------
+| name             | interpreter ips   | interpreter elapsed | jit ips           | jit elapsed     | times faster |
+|------------------|-------------------|---------------------|-------------------|-----------------|--------------|
+| lerp             | 29918408.6608 ips | 3.3424 ellapsed     | 55818487.9227 ips | 1.7915 ellapsed | 1.87x faster |
+| fade             | 14604545.4819 ips | 6.8472 ellapsed     | 39950763.5767 ips | 2.5031 ellapsed | 2.74x faster |
+| dot              | 27826564.1137 ips | 3.5937 ellapsed     | 56335134.1300 ips | 1.7751 ellapsed | 2.02x faster |
+| bubble sort      | 167147.7850 ips   | 0.0598 ellapsed     | 269108.6009 ips   | 0.0372 ellapsed | 1.61x faster |
+| perlin gradients | 81021.3418 ips    | 0.0123 ellapsed     | 143108.6455 ips   | 0.0070 ellapsed | 1.77x faster |
+| in               | 28750844.8431 ips | 3.4782 ellapsed     | 50421734.4458 ips | 1.9833 ellapsed | 1.75x faster |
+| get              | 25482825.1394 ips | 3.9242 ellapsed     | 43789892.2086 ips | 2.2836 ellapsed | 1.72x faster |
+| cmp              | 28202955.0538 ips | 3.5457 ellapsed     | 62948263.5131 ips | 1.5886 ellapsed | 2.23x faster |
+| call             | 29130345.5453 ips | 3.4328 ellapsed     | 23202911.6174 ips | 4.3098 ellapsed | 0.80x faster |
+| C call           | 22250024.1462 ips | 4.4944 ellapsed     | 35393128.2533 ips | 2.8254 ellapsed | 1.59x faster |
+| call jit         | 26754024.7929 ips | 3.7378 ellapsed     | 50056373.4888 ips | 1.9977 ellapsed | 1.87x faster |
+
+I believe the next big performance boost for larger functions will be inlining.
 
 ## Notable Differences from Janet interpreter
 
@@ -103,6 +111,6 @@ Using these operators can slow down jitted functions, but should work as expecte
 
 ## Other things
 
-- Calling out of the JIT uses `janet_call` which means GC will not run. This can be a benefit, or a mistake depending on the application. Calls also have a about 10% performance penalty. If you need to leave the JIT a lot, you won't have very good JIT performance.
+- Calling out of the JIT uses `janet_call` which means GC will not run. This can be a benefit, or a mistake depending on the application. Calls also have a ~10% performance penalty. If you need to leave the JIT a lot, you won't have very good JIT performance.
 
 - `tailcalls` are just normal calls, so you can get stack depth issues you otherwise wouldn't get.
