@@ -14,23 +14,57 @@ typedef Janet (*JitFn)(int32_t argc, Janet *argv);
 size_t call_argc = 0;
 Janet *call_argv = NULL;
 
+
+// jit helpers called form emitted assembly
 uint64_t jit_typecheck(Janet val, uint32_t types) {
   if (!janet_checktypes(val, types)) {
     janet_panicf("expected %T, got %v", types, val);
   }
 }
 
+uint64_t jit_nil(Janet val) {
+  if (janet_checktypes(val, JANET_NIL)) {
+    return 1;
+  } else {
+    return 0;
+  }
+}
 
-// jit helpers called form emitted assembly
+
 uint64_t jit_in(Janet collection, Janet key) {
   // TODO: this one can maybe get a assembly fast path
   return janet_u64(janet_in(collection, key));
 }
 
 uint64_t jit_call(Janet callee) {
-  // TODO: handle keyword case. typecheck this is a function
-  JanetFunction *func = janet_unwrap_function(callee);
-  uint64_t result = janet_u64(janet_call(func, call_argc, call_argv));
+  uint64_t result;
+  if (janet_checktype(callee, JANET_FUNCTION)) {
+    JanetFunction *func = janet_unwrap_function(callee);
+    result = janet_u64(janet_call(func, call_argc, call_argv));
+  } else if (janet_checktype(callee, JANET_CFUNCTION)) {
+    JanetCFunction func = janet_unwrap_cfunction(callee);
+    result = janet_u64(func(call_argc, call_argv));
+  } else if (janet_checktype(callee, JANET_ABSTRACT)) {
+    JanetAbstract abstract = janet_unwrap_abstract(callee);
+    const JanetAbstractType *at = janet_abstract_type(abstract);
+    if (at->call != NULL) {
+      result = janet_u64(at->call(abstract, call_argc, call_argv));
+    } else {
+      janet_panic("attempted to call uncallable abstract type");
+    }
+  } else if (janet_checktype(callee, JANET_KEYWORD)) {
+    if (call_argc == 0) {
+      janet_panic("keyword argument on nil value");
+    }
+
+    Janet kwcallee = janet_get(call_argv[0], callee);
+    if (janet_checktype(kwcallee, JANET_FUNCTION)) {
+      JanetFunction *func = janet_unwrap_function(kwcallee);
+      result = janet_u64(janet_call(func, call_argc, call_argv));
+    } else {
+      janet_panicf("keyword function %p, %p is not callable", callee, kwcallee);
+    }
+  }
   call_argc = 0;
   return result;
 }
@@ -644,10 +678,106 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, int pc, uint32
     code->jump_index++;
     emit_u32(code, 0);
     break;
-  /* case JOP_JUMP_IF: */
-  /* case JOP_JUMP_IF_NOT: */
-  /* case JOP_JUMP_IF_NIL: */
-  /* case JOP_JUMP_IF_NOT_NIL: */
+  case JOP_JUMP_IF:
+    // a -> arg 1
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (7 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    // test if truthy in interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)janet_truthy);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // compare
+    emit_byte(code, 0x85);
+    emit_byte(code, 0xC0);
+    // conditional jump
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x85); // JNZ
+    // jump location to patch later
+    code->jump_targets[code->jump_index] = pc + ((int32_t)instr >> 16);
+    code->jump_locations[code->jump_index] = code->count;
+    code->jump_index++;
+    emit_u32(code, 0);
+    break;
+  case JOP_JUMP_IF_NOT:
+    // a -> arg 1
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (7 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    // test if truthy in interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)janet_truthy);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // compare
+    emit_byte(code, 0x85);
+    emit_byte(code, 0xC0);
+    // conditional jump
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x84); // JZ
+    // jump location to patch later
+    code->jump_targets[code->jump_index] = pc + ((int32_t)instr >> 16);
+    code->jump_locations[code->jump_index] = code->count;
+    code->jump_index++;
+    emit_u32(code, 0);
+    break;
+  case JOP_JUMP_IF_NIL:
+    // a -> arg 1
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (7 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    // test if truthy in interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_nil);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // compare
+    emit_byte(code, 0x85);
+    emit_byte(code, 0xC0);
+    // conditional jump
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x85); // JNZ
+    // jump location to patch later
+    code->jump_targets[code->jump_index] = pc + ((int32_t)instr >> 16);
+    code->jump_locations[code->jump_index] = code->count;
+    code->jump_index++;
+    emit_u32(code, 0);
+    break;
+  case JOP_JUMP_IF_NOT_NIL:
+    // a -> arg 1
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (7 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    // test if truthy in interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_nil);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // compare
+    emit_byte(code, 0x85);
+    emit_byte(code, 0xC0);
+    // conditional jump
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x84); // JZ
+    // jump location to patch later
+    code->jump_targets[code->jump_index] = pc + ((int32_t)instr >> 16);
+    code->jump_locations[code->jump_index] = code->count;
+    code->jump_index++;
+    emit_u32(code, 0);
+    break;
   case JOP_GREATER_THAN:
     emit_stack_to_xmm(code, 0, b);
     emit_stack_to_xmm(code, 1, c);
@@ -1310,7 +1440,6 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, int pc, uint32
     break;
     /* case JOP_PUSH_ARRAY: */
   case JOP_CALL:
-  case JOP_TAILCALL:
     // a = dest e = callee
     // put the error in RDI (first arg)
     emit_byte(code, 0x48);
@@ -1330,6 +1459,38 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, int pc, uint32
     emit_byte(code, 0x84);
     emit_byte(code, 0x24);
     emit_u32(code, a * sizeof(Janet)); // stack location
+    break;
+  case JOP_TAILCALL:
+    // d = callee
+    // put the error in RDI (first arg)
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x8B);
+    emit_byte(code, 0x84 + (7 << 3));
+    emit_byte(code, 0x24);
+    emit_u32(code, d * sizeof(Janet));
+    // go back to the interpreter
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, (uint64_t)(uintptr_t)jit_call);
+    emit_byte(code, 0xFF);
+    emit_byte(code, 0xD0);
+    // store return value
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet)); // stack location
+
+    // restore stack
+    if (stack_size > 0) {
+      // stack adjust
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x81);
+      emit_byte(code, 0xC4);
+      emit_u32(code, stack_size);
+    }
+
+    emit_byte(code, 0xC3); // ret
     break;
   case JOP_RESUME:
     janet_panic("janet's resume opcode is not supported");

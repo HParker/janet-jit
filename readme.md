@@ -38,6 +38,21 @@ You can then build it with,
 jpm build
 ```
 
+## Performance
+
+```
+$ jpm build && janet benchmarks/microbench.janet
+------------------------------------------------------------------------
+| name | interpreter ips | interpreter elapsed | jit ips | jit elapsed | times faster |
+| lerp | 30076163.6578 ips | 3.3249 ellapsed | 55391189.6168 ips | 1.8053 ellapsed  | 1.84x faster |
+| fade | 15188307.3811 ips | 6.5840 ellapsed | 40022490.8151 ips | 2.4986 ellapsed  | 2.64x faster |
+| dot  | 26054360.3505 ips | 3.8381 ellapsed | 55481671.7551 ips | 1.8024 ellapsed  | 2.13x faster |
+| in   | 29014488.2883 ips | 3.4466 ellapsed | 50005290.6583 ips | 1.9998 ellapsed  | 1.72x faster |
+| get  | 25627316.2686 ips | 3.9021 ellapsed | 49932067.1727 ips | 2.0027 ellapsed  | 1.95x faster |
+| cmp  | 27714058.1696 ips | 3.6083 ellapsed | 61109278.8144 ips | 1.6364 ellapsed  | 2.20x faster |
+------------------------------------------------------------------------
+```
+
 ## Notable Differences from Janet interpreter
 
 Jit generated code has less strict garantees about correctness and errors than the interpreter. It expects that you to pass it correct numeric focused code.
@@ -70,7 +85,6 @@ Operations that fall back to the interpreter, will use the JIT:
 - push
 - type check
 - next
-- compare
 - call
 - in
 - get
