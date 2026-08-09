@@ -472,7 +472,7 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_stack_to_gpr(code, 0, b);
     // rhs -> RCX
     emit_stack_to_gpr(code, 1, c);
-    // (band rax rcx)
+    // (bxor rax rcx)
     emit_byte(code, 0x48);
     emit_byte(code, 0x31); // xor
     emit_byte(code, 0xC8);
@@ -517,8 +517,8 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     break;
   case JOP_SHIFT_LEFT_IMMEDIATE:
     emit_stack_to_gpr(code, 0, b);
-    // shift
-    emit_byte(code, 0xD3);
+    // shift imm8
+    emit_byte(code, 0xC1);
     emit_byte(code, 0xE0);
     emit_byte(code, c);
     // rax -> xmm0
@@ -546,7 +546,7 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
   case JOP_SHIFT_RIGHT_IMMEDIATE:
     emit_stack_to_gpr(code, 0, b);
     // shift
-    emit_byte(code, 0xD3);
+    emit_byte(code, 0xC1);
     emit_byte(code, 0xF8);
     emit_byte(code, c);
     // rax -> xmm0
@@ -575,7 +575,7 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
   case JOP_SHIFT_RIGHT_UNSIGNED_IMMEDIATE:
     emit_stack_to_gpr(code, 0, b);
     // shift
-    emit_byte(code, 0xD3);
+    emit_byte(code, 0xC1);
     emit_byte(code, 0xF8);
     emit_byte(code, c);
     // rax -> xmm0
@@ -594,39 +594,426 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
   /* case JOP_JUMP_IF_NOT: */
   /* case JOP_JUMP_IF_NIL: */
   /* case JOP_JUMP_IF_NOT_NIL: */
-  /* case JOP_GREATER_THAN: */
-  /* case JOP_GREATER_THAN_IMMEDIATE: */
-  /* case JOP_LESS_THAN: */
-  /* case JOP_LESS_THAN_IMMEDIATE: */
-  /* case JOP_EQUALS: */
-  /* case JOP_EQUALS_IMMEDIATE: */
-  case JOP_COMPARE:
-    // TODO: this can also probably have a fast path
-    // b = lhs c = rhs
-    // lhs 7 (first arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, b * sizeof(Janet));
-    // rhs 6 (second arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (6 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, c * sizeof(Janet));
-    // go back to the interpreter
+  case JOP_GREATER_THAN:
+    emit_stack_to_xmm(code, 0, b);
+    emit_stack_to_xmm(code, 1, c);
+    // TODO: use this in JOP_COMPARE
+    // ucomisd left, right sets ZF when equal and PF when either value is NaN
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // set AL based on result of comparison
+    // AL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x97); // SETA
+    emit_byte(code, 0xC0); // AL
+    // DL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9B); // SETNP - make nan not equal
+    emit_byte(code, 0xC2); // DL
+    // (and al dl)
+    emit_byte(code, 0x20);
+    emit_byte(code, 0xD0);
+    // store al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD0); // MOVZX EDX, AL.
+    // false -> rax
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)janet_compare);
-    emit_byte(code, 0xFF);
+    emit_u64(code, janet_u64(janet_wrap_false()));
+     // OR RAX, RDX
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x09);
     emit_byte(code, 0xD0);
-    // store return value (as int)
+    // RAX -> stack + offset
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    break;
+  case JOP_GREATER_THAN_IMMEDIATE:
+    emit_stack_to_xmm(code, 0, b);
+    // imm -> rax -> xmm1
+    // imm -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    // rax -> imm1
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x6E);
+    emit_byte(code, 0xC0 + (1 << 3));
+    // ucomisd left, right sets ZF when equal and PF when either value is NaN
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // set AL based on result of comparison
+    // AL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x97); // SETA
+    emit_byte(code, 0xC0); // AL
+    // DL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9B); // SETNP - make nan not equal
+    emit_byte(code, 0xC2); // DL
+    // (and al dl)
+    emit_byte(code, 0x20);
+    emit_byte(code, 0xD0);
+    // store al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD0); // MOVZX EDX, AL.
+    // false -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_false()));
+     // OR RAX, RDX
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x09);
+    emit_byte(code, 0xD0);
+    // RAX -> stack + offset
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    break;
+  case JOP_GREATER_THAN_EQUAL:
+    emit_stack_to_xmm(code, 0, b);
+    emit_stack_to_xmm(code, 1, c);
+    // TODO: use this in JOP_COMPARE
+    // ucomisd left, right sets ZF when equal and PF when either value is NaN
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // set AL based on result of comparison
+    // AL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x93); // SETAE
+    emit_byte(code, 0xC0); // AL
+    // DL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9B); // SETNP - make nan not equal
+    emit_byte(code, 0xC2); // DL
+    // (and al dl)
+    emit_byte(code, 0x20);
+    emit_byte(code, 0xD0);
+    // store al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD0); // MOVZX EDX, AL.
+    // false -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_false()));
+     // OR RAX, RDX
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x09);
+    emit_byte(code, 0xD0);
+    // RAX -> stack + offset
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    break;
+  case JOP_LESS_THAN:
+    emit_stack_to_xmm(code, 0, b);
+    emit_stack_to_xmm(code, 1, c);
+    // TODO: use this in JOP_COMPARE
+    // ucomisd left, right sets ZF when equal and PF when either value is NaN
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // set AL based on result of comparison
+    // AL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x92); // SETB
+    emit_byte(code, 0xC0); // AL
+    // DL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9B); // SETNP - make nan not equal
+    emit_byte(code, 0xC2); // DL
+    // (and al dl)
+    emit_byte(code, 0x20);
+    emit_byte(code, 0xD0);
+    // store al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD0); // MOVZX EDX, AL.
+    // false -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_false()));
+     // OR RAX, RDX
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x09);
+    emit_byte(code, 0xD0);
+    // RAX -> stack + offset
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    break;
+  case JOP_LESS_THAN_IMMEDIATE:
+    emit_stack_to_xmm(code, 0, b);
+    // imm -> rax -> xmm1
+    // imm -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    // rax -> imm1
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x6E);
+    emit_byte(code, 0xC0 + (1 << 3));
+    // ucomisd left, right sets ZF when equal and PF when either value is NaN
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // set AL based on result of comparison
+    // AL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x92); // SETB
+    emit_byte(code, 0xC0); // AL
+    // DL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9B); // SETNP - make nan not equal
+    emit_byte(code, 0xC2); // DL
+    // (and al dl)
+    emit_byte(code, 0x20);
+    emit_byte(code, 0xD0);
+    // store al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD0); // MOVZX EDX, AL.
+    // false -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_false()));
+     // OR RAX, RDX
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x09);
+    emit_byte(code, 0xD0);
+    // RAX -> stack + offset
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    break;
+  case JOP_LESS_THAN_EQUAL:
+    emit_stack_to_xmm(code, 0, b);
+    emit_stack_to_xmm(code, 1, c);
+    // TODO: use this in JOP_COMPARE
+    // ucomisd left, right sets ZF when equal and PF when either value is NaN
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // set AL based on result of comparison
+    // AL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x96); // SETBE
+    emit_byte(code, 0xC0); // AL
+    // DL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9B); // SETNP - make nan not equal
+    emit_byte(code, 0xC2); // DL
+    // (and al dl)
+    emit_byte(code, 0x20);
+    emit_byte(code, 0xD0);
+    // store al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD0); // MOVZX EDX, AL.
+    // false -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_false()));
+    // OR RAX, RDX
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x09);
+    emit_byte(code, 0xD0);
+    // RAX -> stack + offset
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    break;
+  case JOP_EQUALS:
+    emit_stack_to_xmm(code, 0, b);
+    emit_stack_to_xmm(code, 1, c);
+    // TODO: use this in JOP_COMPARE
+    // ucomisd left, right sets ZF when equal and PF when either value is NaN
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // set AL based on result of comparison
+    // AL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x94); // SETE
+    emit_byte(code, 0xC0); // AL
+    // DL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9B); // SETNP - make nan not equal
+    emit_byte(code, 0xC2); // DL
+    // (and al dl)
+    emit_byte(code, 0x20);
+    emit_byte(code, 0xD0);
+    // store al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD0); // MOVZX EDX, AL.
+    // false -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_false()));
+     // OR RAX, RDX
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x09);
+    emit_byte(code, 0xD0);
+    // RAX -> stack + offset
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    break;
+  case JOP_EQUALS_IMMEDIATE:
+    emit_stack_to_xmm(code, 0, b);
+    // imm -> rax -> xmm1
+    // imm -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    // rax -> imm1
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x6E);
+    emit_byte(code, 0xC0 + (1 << 3));
+    // ucomisd left, right sets ZF when equal and PF when either value is NaN
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // set AL based on result of comparison
+    // AL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x94); // SETE
+    emit_byte(code, 0xC0); // AL
+    // DL
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9B); // SETNP - make nan not equal
+    emit_byte(code, 0xC2); // DL
+    // (and al dl)
+    emit_byte(code, 0x20);
+    emit_byte(code, 0xD0);
+    // store al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD0); // MOVZX EDX, AL.
+    // false -> rax
+    emit_byte(code, 0x48);
+    emit_byte(code, 0xB8);
+    emit_u64(code, janet_u64(janet_wrap_false()));
+     // OR RAX, RDX
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x09);
+    emit_byte(code, 0xD0);
+    // RAX -> stack + offset
+    emit_byte(code, 0x48);
+    emit_byte(code, 0x89);
+    emit_byte(code, 0x84);
+    emit_byte(code, 0x24);
+    emit_u32(code, a * sizeof(Janet));
+    break;
+  case JOP_COMPARE:
+    emit_stack_to_xmm(code, 0, b);
+    emit_stack_to_xmm(code, 1, c);
+    // compare
+    emit_byte(code, 0x66);
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x2E);
+    emit_byte(code, 0xC0 + (0 << 3) + 1);
+    // seta al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x97); // SETA -- above
+    emit_byte(code, 0xC0); // AL
+    // setb dl
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x92); // SETB -- below
+    emit_byte(code, 0xC2); // DL
+    // setp cl
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0x9A); // SETP - make nan not equal
+    emit_byte(code, 0xC1); // CL
+    // movzx, eax, al
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xC0);
+    // movzx ecx, cl
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xC9);
+    // zero extend eax
+    emit_byte(code, 0x0F);
+    emit_byte(code, 0xB6);
+    emit_byte(code, 0xD2);
+    // sub eax, edx
+    emit_byte(code, 0x29);
+    emit_byte(code, 0xD0);
+    // lea eax, rax + rcx*2
+    emit_byte(code, 0x8D);
+    emit_byte(code, 0x04);
+    emit_byte(code, 0x48);
+    // eax -> xmm0
     emit_byte(code, 0xF2);
     emit_byte(code, 0x0F);
     emit_byte(code, 0x2A);
     emit_byte(code, 0xC0);
     emit_xmm_to_stack(code, a, 0);
+
+    // TODO use this as the fallback
+    /* // TODO: this can also probably have a fast path */
+    /* // b = lhs c = rhs */
+    /* // lhs 7 (first arg) */
+    /* emit_byte(code, 0x48); */
+    /* emit_byte(code, 0x8B); */
+    /* emit_byte(code, 0x84 + (7 << 3)); */
+    /* emit_byte(code, 0x24); */
+    /* emit_u32(code, b * sizeof(Janet)); */
+    /* // rhs 6 (second arg) */
+    /* emit_byte(code, 0x48); */
+    /* emit_byte(code, 0x8B); */
+    /* emit_byte(code, 0x84 + (6 << 3)); */
+    /* emit_byte(code, 0x24); */
+    /* emit_u32(code, c * sizeof(Janet)); */
+    /* // go back to the interpreter */
+    /* emit_byte(code, 0x48); */
+    /* emit_byte(code, 0xB8); */
+    /* emit_u64(code, (uint64_t)(uintptr_t)janet_compare); */
+    /* emit_byte(code, 0xFF); */
+    /* emit_byte(code, 0xD0); */
+    /* // store return value (as int) */
+    /* emit_byte(code, 0xF2); */
+    /* emit_byte(code, 0x0F); */
+    /* emit_byte(code, 0x2A); */
+    /* emit_byte(code, 0xC0); */
+    /* emit_xmm_to_stack(code, a, 0); */
     break;
   case JOP_LOAD_NIL:
     // load to rax, immediate
@@ -1060,8 +1447,6 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, uint32_t instr
     emit_byte(code, 0x24);
     emit_u32(code, a * sizeof(Janet)); // stack location
     break;
-    /* case JOP_GREATER_THAN_EQUAL: */
-  /* case JOP_LESS_THAN_EQUAL: */
   /* case JOP_NEXT: */
   /* case JOP_NOT_EQUALS: */
   /* case JOP_NOT_EQUALS_IMMEDIATE: */
