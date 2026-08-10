@@ -5,24 +5,23 @@
   (def itterations loops)
   (def jit-f (jit/jitable f))
 
-  (for _ 0 warmup-itterations
+  (repeat warmup-itterations
     (jit-f ;args))
 
-  (if (not (jit/compiled? jit-f))
-    (error "JIT fail to compile"))
+  (assert (jit/compiled? jit-f) "JIT fail to compile")
 
   (def interp-start (os/clock :monotonic))
-  (for _ 0 itterations
+  (repeat itterations
     (f ;args))
   (def interp-elapsed (- (os/clock :monotonic) interp-start))
 
   (def jit-start (os/clock :monotonic))
-  (for _ 0 itterations
+  (repeat itterations
     (jit-f ;args))
   (def jit-elapsed (- (os/clock :monotonic) jit-start))
 
-  (prin (string/format "| %.04f ips | %.04f ellapsed | " (/ itterations interp-elapsed) interp-elapsed))
-  (print (string/format "%.04f ips | %.04f ellapsed  | %.02fx faster |" (/ itterations jit-elapsed) jit-elapsed  (/ interp-elapsed jit-elapsed))))
+  (prinf "| %.04f ips | %.04f ellapsed | " (/ itterations interp-elapsed) interp-elapsed)
+  (printf "%.04f ips | %.04f ellapsed  | %.02fx faster |" (/ itterations jit-elapsed) jit-elapsed  (/ interp-elapsed jit-elapsed)))
 
 (defn lerp
   [a b t]
@@ -93,7 +92,7 @@
   []
   (def angle-count 16)
   (def angle-mul (* (/ math/pi angle-count) 2))
-  (var dirs @[])
+  (def dirs @[])
   (for i 0 angle-count
     (array/push dirs [(math/cos (* i angle-mul)) (math/sin (* i angle-mul))]))
   (var vecs @[])
