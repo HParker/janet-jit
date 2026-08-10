@@ -288,7 +288,7 @@ static void compile_bytecode(CodeBuffer *code, JanetFunction *fn, int pc, uint32
     emit_u32(code, a * sizeof(Janet));
     // immediate type number
     emit_byte(code, 0xBE);
-    emit_u32(code, c);
+    emit_u32(code, e);
     // go back to the interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);

@@ -34,9 +34,17 @@ experimental / educational
 
 You can then build it with,
 
-```janet
+```
 jpm build
 ```
+
+Run the tests with,
+
+```
+janet test/test-asm.janet
+janet test/test-fns.janet
+```
+
 
 ## Performance
 
