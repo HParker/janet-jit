@@ -137,7 +137,6 @@
    [{ :x "the-x" :y "the-y" } { :x "the-x" :y "the-x" }]
   ])
 
-
 (var pass-count 0)
 (each [lhs rhs] deep-not-eq-tests
     (if (jit-result-deep-matches copy-deep-not= lhs rhs)

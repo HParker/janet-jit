@@ -52,27 +52,29 @@ janet test/test-fns.janet
 $ jpm build && janet benchmarks/microbench.janet
 ```
 
----------------------------------------------------------------------------------------
-| name                               | interpreter ips   | interpreter elapsed | jit ips           | jit elapsed     | times faster |
-|------------------------------------|-------------------|---------------------|-------------------|-----------------|--------------|
-| lerp                               | 30645584.3206 ips | 0.3263 ellapsed     | 57815351.7667 ips | 0.1730 ellapsed | 1.89x faster |
-| fade                               | 14727353.3183 ips | 0.6790 ellapsed     | 39557321.7580 ips | 0.2528 ellapsed | 2.69x faster |
-| dot                                | 26685344.7691 ips | 0.3747 ellapsed     | 55041756.9395 ips | 0.1817 ellapsed | 2.06x faster |
-| bubble sort                        | 154294.2862 ips   | 0.0648 ellapsed     | 263985.3640 ips   | 0.0379 ellapsed | 1.71x faster |
-| perlin gradients                   | 85847.0050 ips    | 0.0116 ellapsed     | 147283.6267 ips   | 0.0068 ellapsed | 1.72x faster |
-| in                                 | 29085615.8022 ips | 0.3438 ellapsed     | 50901189.2605 ips | 0.1965 ellapsed | 1.75x faster |
-| get                                | 26764144.4628 ips | 0.3736 ellapsed     | 51039835.3351 ips | 0.1959 ellapsed | 1.91x faster |
-| call                               | 26293972.5356 ips | 0.3803 ellapsed     | 22377352.9710 ips | 0.4469 ellapsed | 0.85x faster |
-| C call                             | 21988227.7526 ips | 0.4548 ellapsed     | 36924371.8988 ips | 0.2708 ellapsed | 1.68x faster |
-| call jit                           | 29741495.3617 ips | 0.3362 ellapsed     | 43852395.9750 ips | 0.2280 ellapsed | 1.47x faster |
-| deep-not= (true)                   | 1621984.6661 ips  | 0.0617 ellapsed     | 1712031.9474 ips  | 0.0584 ellapsed | 1.06x faster |
-| deep-not= (false type difference)  | 1842070.9666 ips  | 0.0543 ellapsed     | 1985943.7282 ips  | 0.0504 ellapsed | 1.08x faster |
-| deep-not= (false value difference) | 1653813.0673 ips  | 0.0605 ellapsed     | 1770605.9890 ips  | 0.0565 ellapsed | 1.07x faster |
-| deep-not= (deep array)             | 233428.1670 ips   | 0.4284 ellapsed     | 242980.8104 ips   | 0.4116 ellapsed | 1.04x faster |
-| deep-not= (deep table)             | 221018.2660 ips   | 0.4525 ellapsed     | 223684.0382 ips   | 0.4471 ellapsed | 1.01x faster |
-| cmp (numeric)                      | 30792105.5198 ips | 0.3248 ellapsed     | 49646474.1689 ips | 0.2014 ellapsed | 1.61x faster |
-| cmp (type difference)              | 30296288.4630 ips | 0.3301 ellapsed     | 45241640.9573 ips | 0.2210 ellapsed | 1.49x faster |
-| cmp (not numeric)                  | 26209991.7334 ips | 0.3815 ellapsed     | 34568671.4320 ips | 0.2893 ellapsed | 1.32x faster |
+------------------------------------------------------------------------------------------------------------------------------------
+| name                              | interpreter ips   | interpreter elapsed | jit ips           | jit elapsed     | times faster |
+|-----------------------------------|-------------------|---------------------|-------------------|-----------------|--------------|
+| len (tuple)                       | 34240890.8491 ips | 2.9205 ellapsed     | 56693764.6445 ips | 1.7639 ellapsed | 1.66x faster |
+| len (string)                      | 32251733.9902 ips | 3.1006 ellapsed     | 55523892.3161 ips | 1.8010 ellapsed | 1.72x faster |
+| len (buffer)                      | 31282958.1885 ips | 3.1966 ellapsed     | 56602906.6222 ips | 1.7667 ellapsed | 1.81x faster |
+| get (tuple & number)              | 33110004.1920 ips | 3.0202 ellapsed     | 57406100.1631 ips | 1.7420 ellapsed | 1.73x faster |
+| get (tuple & number)              | 32348319.1143 ips | 3.0914 ellapsed     | 57923676.9431 ips | 1.7264 ellapsed | 1.79x faster |
+| lerp                              | 28101883.9250 ips | 0.3558 ellapsed     | 49455386.3564 ips | 0.2022 ellapsed | 1.76x faster |
+| fade                              | 14675185.7683 ips | 0.6814 ellapsed     | 39749205.4254 ips | 0.2516 ellapsed | 2.71x faster |
+| dot                               | 26169521.6822 ips | 0.3821 ellapsed     | 47739693.5452 ips | 0.2095 ellapsed | 1.82x faster |
+| bubble sort                       | 164326.4821 ips   | 0.0609 ellapsed     | 270486.3307 ips   | 0.0370 ellapsed | 1.65x faster |
+| perlin gradients                  | 90512.6010 ips    | 1.1048 ellapsed     | 147985.4779 ips   | 0.6757 ellapsed | 1.63x faster |
+| in                                | 26172565.0780 ips | 0.3821 ellapsed     | 42788382.6650 ips | 0.2337 ellapsed | 1.63x faster |
+| get                               | 29058099.2683 ips | 0.3441 ellapsed     | 62917614.8530 ips | 0.1589 ellapsed | 2.17x faster |
+| call                              | 25278975.2954 ips | 0.3956 ellapsed     | 22138527.4269 ips | 0.4517 ellapsed | 0.88x faster |
+| C call                            | 22205791.1697 ips | 0.4503 ellapsed     | 36333494.6268 ips | 0.2752 ellapsed | 1.64x faster |
+| call jit                          | 28491659.3465 ips | 0.0351 ellapsed     | 40356134.7105 ips | 0.0248 ellapsed | 1.42x faster |
+| deep-not= (true)                  | 1624630.3861 ips  | 0.0616 ellapsed     | 1865690.6469 ips  | 0.0536 ellapsed | 1.15x faster |
+| deep-not= (false type difference) | 1880226.8086 ips  | 0.0532 ellapsed     | 2251388.3616 ips  | 0.0444 ellapsed | 1.20x faster |
+| cmp (numeric)                     | 31043180.1427 ips | 0.3221 ellapsed     | 44820904.7677 ips | 0.2231 ellapsed | 1.44x faster |
+| cmp (type difference)             | 31486703.9636 ips | 0.3176 ellapsed     | 42384049.7211 ips | 0.2359 ellapsed | 1.35x faster |
+| cmp (not numeric)                 | 24305963.2370 ips | 0.0411 ellapsed     | 30651891.5954 ips | 0.0326 ellapsed | 1.26x faster |
 
 I believe the next big performance boost for larger functions will be inlining.
 
