@@ -36,7 +36,7 @@
   [x1 y1 x2 y2]
   (+ (* x1 x2) (* y1 y2) ))
 
-(defn my-compare [] (cmp 10 20))
+(defn my-compare [x y] (cmp x y))
 
 (def perm-table
   [151 160 137  91  90  15 131  13 201  95  96  53 194 233   7 225
@@ -88,6 +88,36 @@
 
 (def perm-to-sort (array ;perm-table))
 
+# Copy of deep-not= from boot.janet
+(defn deep-not=
+  ``Like `not=`, but mutable types (arrays, tables, buffers) are considered
+  equal if they have identical structure. Much slower than `not=`.``
+  [x y]
+  (def tx (type x))
+  (or
+    (not= tx (type y))
+    (cond
+      (or (= tx :tuple) (= tx :array))
+      (or (not= (length x) (length y))
+          (do
+            (var ret false)
+            (forv i 0 (length x)
+              (def xx (in x i))
+              (def yy (in y i))
+              (if (deep-not= xx yy)
+                (break (set ret true))))
+            ret))
+      (or (= tx :struct) (= tx :table))
+      (or (not= (length x) (length y))
+          (do
+            (def rawget (if (= tx :struct) struct/rawget table/rawget))
+            (var ret false)
+            (eachp [k v] x
+              (if (deep-not= (rawget y k) v) (break (set ret true))))
+            ret))
+      (= tx :buffer) (not= 0 (- (length x) (length y)) (memcmp x y))
+      (not= x y))))
+
 (defn calculate-perlin-gradients
   []
   (def angle-count 16)
@@ -100,28 +130,45 @@
     (array/push vecs (get dirs (% i angle-count))))
   vecs)
 
+(def deep-array [[1 2] [[1 2 3] [1 2 3]] [[[1 2 3 4]] [[1 2 3 4]]]])
+(def deep-table { :first { :x 1 :y 2} :second { :second-first { :x 1 :y 2 :z 3} :second-second { :x 1 :y 2 :z 3}} :third { :deep{ :deeper { :r 1 :g 2 :b 3 :a 4}}}})
+
 (print "---------------------------------------------------------------------------------------")
 (print "| name | interpreter ips | interpreter elapsed | jit ips | jit elapsed | times faster |")
 (print "| ---- | --------------- | ------------------- | ------- | ----------- | ------------ |")
 (prin "| lerp ")
-(jit-perf-cmp 100000000 lerp 1 300 0.765)
+(jit-perf-cmp 10000000 lerp 1 300 0.765)
 (prin "| fade ")
-(jit-perf-cmp 100000000 fade 20)
+(jit-perf-cmp 10000000 fade 20)
 (prin "| dot  ")
-(jit-perf-cmp 100000000 dot 20.234 30.567 1.23 9.87)
+(jit-perf-cmp 10000000 dot 20.234 30.567 1.23 9.87)
 (prin "| bubble sort ")
 (jit-perf-cmp 10000 bubble-sort perm-to-sort)
 (prin "| perlin gradients ")
 (jit-perf-cmp 1000 calculate-perlin-gradients)
 (prin "| in   ")
-(jit-perf-cmp 100000000 perm-in)
+(jit-perf-cmp 10000000 perm-in)
 (prin "| get  ")
-(jit-perf-cmp 100000000 perm-get)
-(prin "| cmp  ")
-(jit-perf-cmp 100000000 my-compare)
+(jit-perf-cmp 10000000 perm-get)
 (prin "| call  ")
-(jit-perf-cmp 100000000 call-fn)
+(jit-perf-cmp 10000000 call-fn)
 (prin "| C call  ")
-(jit-perf-cmp 100000000 call-cfun)
+(jit-perf-cmp 10000000 call-cfun)
 (prin "| call jit  ")
-(jit-perf-cmp 100000000 call-jit-fun)
+(jit-perf-cmp 10000000 call-jit-fun)
+(prin "| deep-not= (true)")
+(jit-perf-cmp 100000 deep-not= { :x 123 :y 321 } { :x 123 :y 321 })
+(prin "| deep-not= (false type difference)")
+(jit-perf-cmp 100000 deep-not= { :x 123 :y 321 } { :x 123 :y "cat" })
+(prin "| deep-not= (false value difference)")
+(jit-perf-cmp 100000 deep-not= { :x 123 :y 321 } { :x 123 :y 123 })
+(prin "| deep-not= (deep array)")
+(jit-perf-cmp 100000 deep-not= deep-array deep-array)
+(prin "| deep-not= (deep table)")
+(jit-perf-cmp 100000 deep-not= deep-table deep-table)
+(prin "| cmp (numeric) ")
+(jit-perf-cmp 10000000 my-compare 10 20)
+(prin "| cmp (type difference) ")
+(jit-perf-cmp 10000000 my-compare 10 :hi)
+(prin "| cmp (not numeric) ")
+(jit-perf-cmp 10000000 my-compare :hi :hi)

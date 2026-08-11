@@ -99,6 +99,51 @@
 (def kw-method
   @{ :hi (fn [self x] (+ x x)) })
 
+(defn copy-deep-not=
+  ``Like `not=`, but mutable types (arrays, tables, buffers) are considered
+  equal if they have identical structure. Much slower than `not=`.``
+  [x y]
+  (def tx (type x))
+  (or
+    (not= tx (type y))
+    (cond
+      (or (= tx :tuple) (= tx :array))
+      (or (not= (length x) (length y))
+          (do
+            (var ret false)
+            (forv i 0 (length x)
+              (def xx (in x i))
+              (def yy (in y i))
+              (if (deep-not= xx yy)
+                (break (set ret true))))
+            ret))
+      (or (= tx :struct) (= tx :table))
+      (or (not= (length x) (length y))
+          (do
+            (def rawget (if (= tx :struct) struct/rawget table/rawget))
+            (var ret false)
+            (eachp [k v] x
+              (if (deep-not= (rawget y k) v) (break (set ret true))))
+            ret))
+      (= tx :buffer) (not= 0 (- (length x) (length y)) (memcmp x y))
+      (not= x y))))
+
+(def deep-not-eq-tests
+  [[{ :x 123 :y 321 } { :x 123 :y 321 }]
+   [{ :x 123 :y 321 } { :x 123 :y 123 }]
+   [{ :x :the-x :y :the-y } { :x :the-x :y :the-y }]
+   [{ :x :the-x :y :the-y } { :x :the-x :y :the-x }]
+   [{ :x "the-x" :y "the-y" } { :x "the-x" :y "the-y" }]
+   [{ :x "the-x" :y "the-y" } { :x "the-x" :y "the-x" }]
+  ])
+
+
+(var pass-count 0)
+(each [lhs rhs] deep-not-eq-tests
+    (if (jit-result-deep-matches copy-deep-not= lhs rhs)
+      (++ pass-count)))
+(print pass-count " copy-deep-not= passed")
+
 # Tiny tests too small to name
 (def tests
   [(fn [x] x)
