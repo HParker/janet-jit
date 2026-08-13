@@ -248,7 +248,6 @@ void print_specialized_bytecode(JittedFunction *jitted) {
 void dataflow(JittedFunction *jitted, int32_t argc, Janet *argv) {
   JanetFunction *fn = jitted->fallback;
   JanetFuncDef *def = fn->def;
-  size_t arity = def->arity;
   size_t bc_len = def->bytecode_length;
   int32_t def_slots = def->slotcount;
 
@@ -257,8 +256,6 @@ void dataflow(JittedFunction *jitted, int32_t argc, Janet *argv) {
   for (int i = 0; i < bc_len * def_slots; i++) {
     slot_types[i].t = JIT_UNKNOWN;
   }
-  jitted->flow = slot_types;
-  // copile bytecode
 
   for (int i = 0; i < argc; i++) {
     slot_types[i].t = janet_type(argv[i]);
@@ -509,6 +506,39 @@ static void emit_binary_op(CodeBuffer *code, uint8_t op, uint32_t dest, uint32_t
   emit_byte(code, 0xC0 + (lhs << 3) + rhs);
 }
 
+// used for first arg when jumping back to C
+static int arg_loc[] = { 7, 6, 2 };
+static void emit_stack_to_arg(CodeBuffer *code, uint32_t dest, uint32_t stack_loc) {
+  emit_byte(code, 0x48);
+  emit_byte(code, 0x8B);
+  emit_byte(code, 0x84 + (arg_loc[dest] << 3));
+  emit_byte(code, 0x24);
+  emit_u32(code, stack_loc * sizeof(Janet));
+}
+
+static void emit_cfun_call(CodeBuffer *code, void *func) {
+  emit_byte(code, 0x48);
+  emit_byte(code, 0xB8);
+  emit_u64(code, (uint64_t)(uintptr_t)func);
+  emit_byte(code, 0xFF);
+  emit_byte(code, 0xD0);
+}
+
+static void emit_imm_rax(CodeBuffer *code, uint64_t val) {
+  emit_byte(code, 0x48);
+  emit_byte(code, 0xB8);
+  emit_u64(code, val);
+}
+
+// rax -> stack rsp + stack_offset
+static void emit_store_ret(CodeBuffer *code, uint32_t offset) {
+  emit_byte(code, 0x48);
+  emit_byte(code, 0x89);
+  emit_byte(code, 0x84);
+  emit_byte(code, 0x24);
+  emit_u32(code, offset * sizeof(Janet));
+}
+
 static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, uint32_t instr, int stack_size) {
   // TODO: these can be #define/macros, but this is fine for now
 
@@ -530,35 +560,15 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
   case JOP_NOOP:
     break;
   case JOP_ERROR:
-    // put the error in RDI (first arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)janet_panicv);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_stack_to_arg(code, 0, a);
+    emit_cfun_call(code, janet_panicv);
     break;
   case JOP_TYPECHECK:
-    // a = slot e = type(s)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_stack_to_arg(code, 0, a);
     // immediate type number
     emit_byte(code, 0xBE);
     emit_u32(code, e);
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_typecheck);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_cfun_call(code, jit_typecheck);
     break;
   case JOP_RETURN:
     // mov rax, rsp + offset
@@ -576,7 +586,6 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_byte(code, 0xC4);
       emit_u32(code, stack_size);
     }
-
     emit_byte(code, 0xC3); // ret
     break;
   case JOP_RETURN_NIL:
@@ -598,11 +607,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
   case JOP_ADD_IMMEDIATE:
     // lhs -> xmm0
     emit_stack_to_xmm(code, 0, b);
-    // imm -> rax -> xmm1
-    // imm -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
@@ -626,11 +631,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
   case JOP_SUBTRACT_IMMEDIATE:
     // lhs -> xmm0
     emit_stack_to_xmm(code, 0, b);
-    // imm -> rax -> xmm1
-    // imm -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
@@ -654,11 +655,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
   case JOP_MULTIPLY_IMMEDIATE:
     // lhs -> xmm0
     emit_stack_to_xmm(code, 0, b);
-    // imm -> rax -> xmm1
-    // imm -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
@@ -682,11 +679,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
   case JOP_DIVIDE_IMMEDIATE:
     // lhs -> xmm0
     emit_stack_to_xmm(code, 0, b);
-    // imm -> rax -> xmm1
-    // imm -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
@@ -968,12 +961,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_u32(code, 0);
     break;
   case JOP_JUMP_IF_NOT:
-    // a -> arg 1
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_stack_to_arg(code, 0, a);
     // test if truthy in interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
@@ -993,12 +981,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_u32(code, 0);
     break;
   case JOP_JUMP_IF_NIL:
-    // a -> arg 1
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_stack_to_arg(code, 0, a);
     // test if truthy in interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
@@ -1018,12 +1001,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_u32(code, 0);
     break;
   case JOP_JUMP_IF_NOT_NIL:
-    // a -> arg 1
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_stack_to_arg(code, 0, a);
     // test if truthy in interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
@@ -1074,20 +1052,11 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_byte(code, 0x48);
     emit_byte(code, 0x09);
     emit_byte(code, 0xD0);
-    // RAX -> stack + offset
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_store_ret(code, a);
     break;
   case JOP_GREATER_THAN_IMMEDIATE:
     emit_stack_to_xmm(code, 0, b);
-    // imm -> rax -> xmm1
-    // imm -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
@@ -1123,12 +1092,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_byte(code, 0x48);
     emit_byte(code, 0x09);
     emit_byte(code, 0xD0);
-    // RAX -> stack + offset
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_store_ret(code, a);
     break;
   case JOP_GREATER_THAN_EQUAL:
     emit_stack_to_xmm(code, 0, b);
@@ -1162,12 +1126,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_byte(code, 0x48);
     emit_byte(code, 0x09);
     emit_byte(code, 0xD0);
-    // RAX -> stack + offset
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_store_ret(code, a);
     break;
   case JOP_LESS_THAN:
     emit_stack_to_xmm(code, 0, b);
@@ -1201,21 +1160,12 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_byte(code, 0x48);
     emit_byte(code, 0x09);
     emit_byte(code, 0xD0);
-    // RAX -> stack + offset
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_store_ret(code, a);
     break;
   case JOP_LESS_THAN_IMMEDIATE:
     emit_stack_to_xmm(code, 0, b);
-    // imm -> rax -> xmm1
-    // imm -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
-    // rax -> imm1
+    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
+    // rax -> xmm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
     emit_byte(code, 0x0F);
@@ -1250,12 +1200,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_byte(code, 0x48);
     emit_byte(code, 0x09);
     emit_byte(code, 0xD0);
-    // RAX -> stack + offset
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_store_ret(code, a);
     break;
   case JOP_LESS_THAN_EQUAL:
     emit_stack_to_xmm(code, 0, b);
@@ -1289,12 +1234,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_byte(code, 0x48);
     emit_byte(code, 0x09);
     emit_byte(code, 0xD0);
-    // RAX -> stack + offset
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_store_ret(code, a);
     break;
   case JOP_EQUALS:
     if (ENABLE_DATAFLOW_TYPESPECIALIZATION && jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
@@ -1331,12 +1271,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_byte(code, 0x48);
       emit_byte(code, 0x09);
       emit_byte(code, 0xD0);
-      // RAX -> stack + offset
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x89);
-      emit_byte(code, 0x84);
-      emit_byte(code, 0x24);
-      emit_u32(code, a * sizeof(Janet));
+      emit_store_ret(code, a);
     } else if (ENABLE_DATAFLOW_TYPESPECIALIZATION && jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_KEYWORD &&
 	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_KEYWORD) {
       /* printf("emitting keyword fast path\n"); */
@@ -1373,46 +1308,18 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_byte(code, 0x48);
       emit_byte(code, 0x09);
       emit_byte(code, 0xD0);
-      // RAX -> stack + offset
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x89);
-      emit_byte(code, 0x84);
-      emit_byte(code, 0x24);
-      emit_u32(code, a * sizeof(Janet));
+      emit_store_ret(code, a);
     } else {
-      // lhs RDI
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x8B);
-      emit_byte(code, 0x84 + (7 << 3));
-      emit_byte(code, 0x24);
-      emit_u32(code, b * sizeof(Janet));
-      // rhs RSI
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x8B);
-      emit_byte(code, 0x84 + (6 << 3));
-      emit_byte(code, 0x24);
-      emit_u32(code, c * sizeof(Janet));
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
       // go back to the interpreter
-      emit_byte(code, 0x48);
-      emit_byte(code, 0xB8);
-      emit_u64(code, (uint64_t)(uintptr_t)jit_equals);
-      emit_byte(code, 0xFF);
-      emit_byte(code, 0xD0);
-      // RAX -> stack + offset
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x89);
-      emit_byte(code, 0x84);
-      emit_byte(code, 0x24);
-      emit_u32(code, a * sizeof(Janet));
+      emit_cfun_call(code, jit_equals);
+      emit_store_ret(code, a);
     }
     break;
   case JOP_EQUALS_IMMEDIATE:
     emit_stack_to_xmm(code, 0, b);
-    // imm -> rax -> xmm1
-    // imm -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
@@ -1499,18 +1406,8 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     } else if (ENABLE_DATAFLOW_TYPESPECIALIZATION && jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_KEYWORD &&
 	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_KEYWORD) {
       /* printf("emitting keyword fast path\n"); */
-      // lhs RDI
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x8B);
-      emit_byte(code, 0x84 + (7 << 3));
-      emit_byte(code, 0x24);
-      emit_u32(code, b * sizeof(Janet));
-      // rhs RSI
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x8B);
-      emit_byte(code, 0x84 + (6 << 3));
-      emit_byte(code, 0x24);
-      emit_u32(code, c * sizeof(Janet));
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
       // cmp rdi, rsi
       emit_byte(code, 0x48);
       emit_byte(code, 0x39);
@@ -1532,46 +1429,19 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_byte(code, 0x48);
       emit_byte(code, 0x09);
       emit_byte(code, 0xD0);
-      // RAX -> stack + offset
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x89);
-      emit_byte(code, 0x84);
-      emit_byte(code, 0x24);
-      emit_u32(code, a * sizeof(Janet));
+      emit_store_ret(code, a);
     } else {
       // lhs RDI
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x8B);
-      emit_byte(code, 0x84 + (7 << 3));
-      emit_byte(code, 0x24);
-      emit_u32(code, b * sizeof(Janet));
+      emit_stack_to_arg(code, 0, b);
       // rhs RSI
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x8B);
-      emit_byte(code, 0x84 + (6 << 3));
-      emit_byte(code, 0x24);
-      emit_u32(code, c * sizeof(Janet));
-      // go back to the interpreter
-      emit_byte(code, 0x48);
-      emit_byte(code, 0xB8);
-      emit_u64(code, (uint64_t)(uintptr_t)jit_not_equals);
-      emit_byte(code, 0xFF);
-      emit_byte(code, 0xD0);
-      // RAX -> stack + offset
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x89);
-      emit_byte(code, 0x84);
-      emit_byte(code, 0x24);
-      emit_u32(code, a * sizeof(Janet));
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_not_equals);
+      emit_store_ret(code, a);
     }
     break;
   case JOP_NOT_EQUALS_IMMEDIATE:
     emit_stack_to_xmm(code, 0, b);
-    // imm -> rax -> xmm1
-    // imm -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(imm8)));
+    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
     // rax -> imm1
     emit_byte(code, 0x66);
     emit_byte(code, 0x48);
@@ -1607,28 +1477,15 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_byte(code, 0x48);
     emit_byte(code, 0x09);
     emit_byte(code, 0xD0);
-    // RAX -> stack + offset
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_store_ret(code, a);
     break;
   case JOP_COMPARE:
     // check numeric for fast path
     // b = lhs c = rhs
     // lhs 7 (first arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, b * sizeof(Janet));
+    emit_stack_to_arg(code, 0, b);
     // rhs 6 (second arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (6 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, c * sizeof(Janet));
+    emit_stack_to_arg(code, 1, c);
     // go back to the interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
@@ -1689,7 +1546,6 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_byte(code, 0x2A);
     emit_byte(code, 0xC0);
     emit_xmm_to_stack(code, a, 0);
-
     // jump to done
     emit_byte(code, 0xE9);
     jump_patch_done = code->count;
@@ -1704,17 +1560,9 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     // TODO: this can also probably have a fast path
     // b = lhs c = rhs
     // lhs 7 (first arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, b * sizeof(Janet));
+    emit_stack_to_arg(code, 0, b);
     // rhs 6 (second arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (6 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, c * sizeof(Janet));
+    emit_stack_to_arg(code, 1, c);
     // go back to the interpreter
     emit_byte(code, 0x48);
     emit_byte(code, 0xB8);
@@ -1736,83 +1584,32 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     }
     break;
   case JOP_LOAD_NIL:
-    // load to rax, immediate
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_nil()));
-
-    // mov rsp + offset, rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, d * sizeof(Janet));
+    emit_imm_rax(code, janet_u64(janet_wrap_nil()));
+    emit_store_ret(code, d);
     break;
   case JOP_LOAD_TRUE:
-    // load to rax, immediate
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_true()));
-
-    // mov rsp + offset, rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, d * sizeof(Janet));
+    emit_imm_rax(code, janet_u64(janet_wrap_true()));
+    emit_store_ret(code, d);
     break;
   case JOP_LOAD_FALSE:
-    // load to rax, immediate
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_false()));
-
-    // mov rsp + offset, rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, d * sizeof(Janet));
+    emit_imm_rax(code, janet_u64(janet_wrap_false()));
+    emit_store_ret(code, d);
     break;
   case JOP_LOAD_INTEGER:
-    // load to rax, immediate
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_integer(imm)));
-
-    // mov rsp + offset, rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm)));
+    emit_store_ret(code, a);
     break;
   case JOP_LOAD_CONSTANT:
-    // load to rax, immediate
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(constants[e]));
-    // store rax on stack
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    emit_imm_rax(code, janet_u64(constants[e]));
+    emit_store_ret(code, a);
     break;
   case JOP_LOAD_UPVALUE:
     janet_panic("janet's upvalue opcode is not supported");
     break;
   case JOP_LOAD_SELF:
-    // load to rax, immediate
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_function(fn)));
+    emit_imm_rax(code, janet_u64(janet_wrap_function(fn)));
     // store rax on stack
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, d * sizeof(Janet));
+    emit_store_ret(code, d);
     break;
   case JOP_SET_UPVALUE:
     janet_panic("janet's set upvalue opcode is not supported");
@@ -1823,111 +1620,37 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
   case JOP_PUSH:
     // d = value to push
     // put the error in RDI (first arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, d * sizeof(Janet));
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_push);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_stack_to_arg(code, 0, d);
+    emit_cfun_call(code, jit_push);
     break;
   case JOP_PUSH_2:
     // a, e
-    // put the error in RDI (first arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
-
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (6 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, e * sizeof(Janet));
-
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_push_2);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_stack_to_arg(code, 0, a);
+    emit_stack_to_arg(code, 1, e);
+    emit_cfun_call(code, jit_push_2);
     break;
   case JOP_PUSH_3:
     // a, b, c
     // put the error in RDI (first arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
-
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (6 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, b * sizeof(Janet));
-
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (2 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, c * sizeof(Janet));
-
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_push_3);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_stack_to_arg(code, 0, a);
+    emit_stack_to_arg(code, 1, b);
+    emit_stack_to_arg(code, 2, c);
+    emit_cfun_call(code, jit_push_3);
     break;
     /* case JOP_PUSH_ARRAY: */
   case JOP_CALL:
     // a = dest e = callee
     // put the error in RDI (first arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, e * sizeof(Janet));
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_call);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+    emit_stack_to_arg(code, 0, e);
+    emit_cfun_call(code, jit_call);
+    emit_store_ret(code, a);
     break;
   case JOP_TAILCALL:
     // d = callee
     // put the error in RDI (first arg)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, d * sizeof(Janet));
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_call);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
-
+    emit_stack_to_arg(code, 0, d);
+    emit_cfun_call(code, jit_call);
+    emit_store_ret(code, a);
     // restore stack
     if (stack_size > 0) {
       // stack adjust
@@ -1951,29 +1674,10 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
   case JOP_IN:
     // b = collection, c = key
     // collection arg 1 (7)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, b * sizeof(Janet));
-    // key (6)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (6 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, c * sizeof(Janet));
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)janet_in);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+    emit_stack_to_arg(code, 0, b);
+    emit_stack_to_arg(code, 1, c);
+    emit_cfun_call(code, janet_in);
+    emit_store_ret(code, a);
     break;
   case JOP_GET:
     // b = collection, c = key
@@ -2013,99 +1717,39 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_byte(code, 0x8B);
       emit_byte(code, 0x04);
       emit_byte(code, 0xD0);
-      // store back on the stack
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x89);
-      emit_byte(code, 0x84);
-      emit_byte(code, 0x24);
-      emit_u32(code, a * sizeof(Janet)); // stack location
+
+      emit_store_ret(code, a);
     } else {
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x8B);
-      emit_byte(code, 0x84 + (7 << 3));
-      emit_byte(code, 0x24);
-      emit_u32(code, b * sizeof(Janet));
-      // key (6)
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x8B);
-      emit_byte(code, 0x84 + (6 << 3));
-      emit_byte(code, 0x24);
-      emit_u32(code, c * sizeof(Janet));
-      // go back to the interpreter
-      emit_byte(code, 0x48);
-      emit_byte(code, 0xB8);
-      emit_u64(code, (uint64_t)(uintptr_t)janet_get);
-      emit_byte(code, 0xFF);
-      emit_byte(code, 0xD0);
-      // store return value
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x89);
-      emit_byte(code, 0x84);
-      emit_byte(code, 0x24);
-      emit_u32(code, a * sizeof(Janet)); // stack location
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, janet_get);
+      emit_store_ret(code, a);
     }
     break;
   case JOP_GET_INDEX:
     // b = collection, c = key
     // collection arg 1 (7)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, b * sizeof(Janet));
+    emit_stack_to_arg(code, 0, b);
     // key (6)
     // c immidiate (6)
     emit_byte(code, 0xBE);
     emit_u32(code, c);
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)janet_getindex);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+
+    emit_cfun_call(code, janet_getindex);
+    emit_store_ret(code, a);
     break;
   case JOP_PUT:
     // a = collection, b = key, c = val
     // collection arg 1 (7)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
-    // key (6)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (6 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, b * sizeof(Janet));
-    // val (2)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (2 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, c * sizeof(Janet));
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)janet_put);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_stack_to_arg(code, 0, a);
+    emit_stack_to_arg(code, 1, b);
+    emit_stack_to_arg(code, 2, c);
+    emit_cfun_call(code, janet_put);
     break;
   case JOP_PUT_INDEX:
     // a = collection, c = key b = value
     // collection arg 1 (7)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
-
+    emit_stack_to_arg(code, 0, a);
     // c immidiate (6)
     emit_byte(code, 0xBE);
     emit_u32(code, c);
@@ -2117,12 +1761,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_byte(code, 0x24);
     emit_u32(code, b * sizeof(Janet));
 
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)janet_putindex);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_cfun_call(code, janet_putindex);
     break;
   case JOP_LENGTH:
     if (ENABLE_DATAFLOW_TYPESPECIALIZATION && jitted->flow[(pc * fn->def->slotcount) + e].t == JANET_TUPLE) {
@@ -2213,148 +1852,46 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_xmm_to_stack(code, a, 0);
     } else {
       // e = collection
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x8B);
-      emit_byte(code, 0x84 + (7 << 3));
-      emit_byte(code, 0x24);
-      emit_u32(code, e * sizeof(Janet));
-      emit_byte(code, 0x48);
-      emit_byte(code, 0xB8);
-      emit_u64(code, (uint64_t)(uintptr_t)janet_lengthv);
-      emit_byte(code, 0xFF);
-      emit_byte(code, 0xD0);
-      // store return value
-      emit_byte(code, 0x48);
-      emit_byte(code, 0x89);
-      emit_byte(code, 0x84);
-      emit_byte(code, 0x24);
-      emit_u32(code, a * sizeof(Janet)); // stack location
+      emit_stack_to_arg(code, 0, e);
+      emit_cfun_call(code, janet_lengthv);
+      emit_store_ret(code, a);
     }
     break;
   case JOP_MAKE_ARRAY:
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_make_array);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+    emit_cfun_call(code, jit_make_array);
+    emit_store_ret(code, a);
     break;
   case JOP_MAKE_TUPLE:
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_make_tuple);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+    emit_cfun_call(code, jit_make_tuple);
+    emit_store_ret(code, a);
     break;
   case JOP_MAKE_BRACKET_TUPLE:
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_make_bracket_tuple);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+    emit_cfun_call(code, jit_make_bracket_tuple);
+    emit_store_ret(code, a);
     break;
   case JOP_MAKE_BUFFER:
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_make_buffer);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+    emit_cfun_call(code, jit_make_buffer);
+    emit_store_ret(code, a);
     break;
   case JOP_MAKE_STRING:
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_make_string);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+    emit_cfun_call(code, jit_make_string);
+    emit_store_ret(code, a);
     break;
   case JOP_MAKE_STRUCT:
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_make_struct);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+    emit_cfun_call(code, jit_make_struct);
+    emit_store_ret(code, a);
     break;
   case JOP_MAKE_TABLE:
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_make_table);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+    emit_cfun_call(code, jit_make_table);
+    emit_store_ret(code, a);
     break;
   case JOP_NEXT:
     // b = collection, c = key
     // collection arg 1 (7)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, b * sizeof(Janet));
-    // key (6)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (6 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, c * sizeof(Janet));
-    // go back to the interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)janet_next);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
-    // store return value
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet)); // stack location
+    emit_stack_to_arg(code, 0, b);
+    emit_stack_to_arg(code, 1, c);
+    emit_cfun_call(code, janet_next);
+    emit_store_ret(code, a);
     break;
   case JOP_CANCEL:
     janet_panic("janet's cancel opcode is not supported");
@@ -2426,8 +1963,6 @@ int jitted_compile(JittedFunction *jitted) {
     }
   }
 
-
-
   void * mapping = mmap(NULL,
 			code.count,
 			PROT_READ | PROT_WRITE,
@@ -2471,8 +2006,13 @@ static Janet jitted_function_call(void *p, int32_t argc, Janet *argv) {
     jitted_compile(jitted);
   }
 
-  // TODO: actually check all types match
+
   if (argc == jitted->signature_argc) {
+    for (int i = 0; i < argc; i++) {
+      if (janet_type(argv[i]) != jitted->signature_arg_types[i]) {
+	janet_panic("mismatching signature!");
+      }
+    }
     return ((JitFn)jitted->code)(argc, argv);
   } else {
     janet_panic("mismatching signature!");
@@ -2500,13 +2040,13 @@ static const JanetAbstractType jitted_function_type = {
 static Janet jit_jitable(int32_t argc, Janet *argv) {
   janet_fixarity(argc, 1);
 
+  // todo: disqualify variable arg functions for now
+
   if (cfun_info_count == 0) {
     cfun_info[cfun_info_count].cfun = janet_unwrap_cfunction(janet_resolve_core("math/sin"));
     cfun_info[cfun_info_count++].result = JANET_NUMBER;
-
     cfun_info[cfun_info_count].cfun = janet_unwrap_cfunction(janet_resolve_core("math/cos"));
     cfun_info[cfun_info_count++].result = JANET_NUMBER;
-
     cfun_info[cfun_info_count].cfun = janet_unwrap_cfunction(janet_resolve_core("type"));
     cfun_info[cfun_info_count++].result = JANET_KEYWORD;
   }
