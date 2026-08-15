@@ -11,10 +11,13 @@
 
 #define ENABLE_DATAFLOW_TYPESPECIALIZATION 1
 
-typedef Janet (*JitFn)(int32_t argc, Janet *argv);
+typedef struct {
+  size_t count;
+  size_t capacity;
+  Janet *argv;
+} CallArgs;
 
-size_t call_argc = 0;
-Janet *call_argv = NULL;
+typedef Janet (*JitFn)(int32_t argc, Janet *argv, CallArgs *call_args);
 
 // jit helpers called form emitted assembly
 uint64_t jit_typecheck(Janet val, uint32_t types) {
@@ -47,125 +50,131 @@ uint64_t jit_u64_orderable(Janet lhs, Janet rhs) {
     (janet_checktype(rhs, JANET_NUMBER));
 }
 
-uint64_t jit_call(Janet callee) {
+uint64_t jit_call(Janet callee, CallArgs *call_args) {
   uint64_t result;
   if (janet_checktype(callee, JANET_FUNCTION)) {
     JanetFunction *func = janet_unwrap_function(callee);
-    result = janet_u64(janet_call(func, call_argc, call_argv));
+    result = janet_u64(janet_call(func, call_args->count, call_args->argv));
   } else if (janet_checktype(callee, JANET_CFUNCTION)) {
     JanetCFunction func = janet_unwrap_cfunction(callee);
-    result = janet_u64(func(call_argc, call_argv));
+    result = janet_u64(func(call_args->count, call_args->argv));
   } else if (janet_checktype(callee, JANET_ABSTRACT)) {
     JanetAbstract abstract = janet_unwrap_abstract(callee);
     const JanetAbstractType *at = janet_abstract_type(abstract);
     if (at->call != NULL) {
-      result = janet_u64(at->call(abstract, call_argc, call_argv));
+      result = janet_u64(at->call(abstract, call_args->count, call_args->argv));
     } else {
       janet_panic("attempted to call uncallable abstract type");
     }
   } else if (janet_checktype(callee, JANET_KEYWORD)) {
-    if (call_argc == 0) {
+    if (call_args->count == 0) {
       janet_panic("keyword argument on nil value");
     }
 
-    Janet kwcallee = janet_get(call_argv[0], callee);
+    Janet kwcallee = janet_get(call_args->argv[0], callee);
     if (janet_checktype(kwcallee, JANET_FUNCTION)) {
       JanetFunction *func = janet_unwrap_function(kwcallee);
-      result = janet_u64(janet_call(func, call_argc, call_argv));
+      result = janet_u64(janet_call(func, call_args->count, call_args->argv));
     } else {
       janet_panicf("keyword function %p, %p is not callable", callee, kwcallee);
     }
+  } else {
+    janet_panic("attempted to call uncallable type");
   }
-  call_argc = 0;
+  call_args->count = 0;
   return result;
 }
 
-uint64_t jit_make_array() {
-  Janet a = janet_wrap_array(janet_array_n(call_argv, call_argc));
-  call_argc = 0;
+uint64_t jit_make_array(CallArgs *call_args) {
+  Janet a = janet_wrap_array(janet_array_n(call_args->argv, call_args->count));
+  call_args->count = 0;
   return janet_u64(a);
 }
 
-uint64_t jit_make_tuple() {
-  JanetTuple t = janet_tuple_n(call_argv, call_argc);
+uint64_t jit_make_tuple(CallArgs *call_args) {
+  JanetTuple t = janet_tuple_n(call_args->argv, call_args->count);
   Janet tup = janet_wrap_tuple(t);
-  call_argc = 0;
+  call_args->count = 0;
   return janet_u64(tup);
 }
 
-uint64_t jit_make_bracket_tuple() {
-  JanetTuple t = janet_tuple_n(call_argv, call_argc);
+uint64_t jit_make_bracket_tuple(CallArgs *call_args) {
+  JanetTuple t = janet_tuple_n(call_args->argv, call_args->count);
   janet_tuple_flag(t) |= JANET_TUPLE_FLAG_BRACKETCTOR;
   Janet tup = janet_wrap_tuple(t);
-  call_argc = 0;
+  call_args->count = 0;
   return janet_u64(tup);
 }
 
-uint64_t jit_make_buffer() {
-  JanetBuffer *b = janet_buffer(call_argc * 10);
-  for (int i = 0; i < call_argc; i++) {
-    janet_to_string_b(b, call_argv[i]);
+uint64_t jit_make_buffer(CallArgs *call_args) {
+  JanetBuffer *b = janet_buffer(call_args->count * 10);
+  for (int i = 0; i < call_args->count; i++) {
+    janet_to_string_b(b, call_args->argv[i]);
   }
-  call_argc = 0;
+  call_args->count = 0;
   return janet_u64(janet_wrap_buffer(b));
 }
 
-uint64_t jit_make_string() {
-  JanetBuffer *b = janet_buffer(call_argc * 10);
-  for (int i = 0; i < call_argc; i++) {
-    janet_to_string_b(b, call_argv[i]);
+uint64_t jit_make_string(CallArgs *call_args) {
+  JanetBuffer *b = janet_buffer(call_args->count * 10);
+  for (int i = 0; i < call_args->count; i++) {
+    janet_to_string_b(b, call_args->argv[i]);
   }
-  call_argc = 0;
+  call_args->count = 0;
   // TODO: this leaves a garbage buffer we can potentially skip
   return janet_u64(janet_stringv(b->data, b->count));
 }
 
-uint64_t jit_make_table() {
-  if (call_argc & 1) {
-    janet_panicf("expected even number of arguments to table constructor, got %d", call_argc);
+uint64_t jit_make_table(CallArgs *call_args) {
+  if (call_args->count & 1) {
+    janet_panicf("expected even number of arguments to table constructor, got %d", call_args->count);
   }
-  JanetTable *tab = janet_table(call_argc / 2);
-  for (int i = 0; i < call_argc; i += 2) {
-    janet_table_put(tab, call_argv[i], call_argv[i + 1]);
+  JanetTable *tab = janet_table(call_args->count / 2);
+  for (int i = 0; i < call_args->count; i += 2) {
+    janet_table_put(tab, call_args->argv[i], call_args->argv[i + 1]);
   }
-  call_argc = 0;
+  call_args->count = 0;
   return janet_u64(janet_wrap_table(tab));
 }
 
-uint64_t jit_make_struct() {
-  if (call_argc & 1) {
-    janet_panicf("expected even number of arguments to struct constructor, got %d", call_argc);
+uint64_t jit_make_struct(CallArgs *call_args) {
+  if (call_args->count & 1) {
+    janet_panicf("expected even number of arguments to struct constructor, got %d", call_args->count);
   }
-  JanetKV *st = janet_struct_begin(call_argc / 2);
-  for (int i = 0; i < call_argc; i += 2) {
-    janet_struct_put(st, call_argv[i], call_argv[i + 1]);
+  JanetKV *st = janet_struct_begin(call_args->count / 2);
+  for (int i = 0; i < call_args->count; i += 2) {
+    janet_struct_put(st, call_args->argv[i], call_args->argv[i + 1]);
   }
-  call_argc = 0;
+  call_args->count = 0;
   return janet_u64(janet_wrap_struct(janet_struct_end(st)));
 }
 
-void jit_push(Janet value) {
-  if (call_argv == NULL) {
-    call_argv = malloc(8 * sizeof(Janet));
+void ensure_argv_space(CallArgs *call_args, size_t request) {
+  if (call_args->capacity == 0) {
+    call_args->capacity = (request > 8) ? request : 8;
+    call_args->argv = malloc(call_args->capacity * sizeof(Janet));
+  } else if (call_args->count + request > call_args->capacity) {
+    call_args->capacity *= 2;
+    call_args->argv = realloc(call_args->argv, call_args->capacity * sizeof(Janet));
   }
-  call_argv[call_argc++] = value;
 }
 
-void jit_push_2(Janet value1, Janet value2) {
-  if (call_argv == NULL) {
-    call_argv = malloc(8 * sizeof(Janet));
-  }
-  call_argv[call_argc++] = value1;
-  call_argv[call_argc++] = value2;
+void jit_push(Janet value, CallArgs *call_args) {
+  ensure_argv_space(call_args, 1);
+  call_args->argv[call_args->count++] = value;
 }
 
-void jit_push_3(Janet value1, Janet value2, Janet value3) {
-  if (call_argv == NULL) {
-    call_argv = malloc(8 * sizeof(Janet));
-  }
-  call_argv[call_argc++] = value1;
-  call_argv[call_argc++] = value2;
-  call_argv[call_argc++] = value3;
+void jit_push_2(Janet value1, Janet value2, CallArgs *call_args) {
+  ensure_argv_space(call_args, 2);
+  call_args->argv[call_args->count++] = value1;
+  call_args->argv[call_args->count++] = value2;
+}
+
+void jit_push_3(Janet value1, Janet value2, Janet value3, CallArgs *call_args) {
+  ensure_argv_space(call_args, 3);
+  call_args->argv[call_args->count++] = value1;
+  call_args->argv[call_args->count++] = value2;
+  call_args->argv[call_args->count++] = value3;
 }
 
 #define JIT_UNKNOWN (JANET_POINTER + 1)
@@ -200,7 +209,6 @@ typedef struct {
   JitFlowInfo *flow;
   size_t signature_argc;
   JanetType *signature_arg_types;
-
 } JittedFunction;
 
 typedef struct {
@@ -215,7 +223,6 @@ typedef struct {
 void print_specialized_bytecode(JittedFunction *jitted) {
   JanetFunction *fn = jitted->fallback;
   JanetFuncDef *def = fn->def;
-  size_t arity = def->arity;
   size_t bc_len = def->bytecode_length;
   int32_t def_slots = def->slotcount;
   JitFlowInfo *flow = jitted->flow;
@@ -233,9 +240,9 @@ void print_specialized_bytecode(JittedFunction *jitted) {
     printf("%i. %s | ", i, janet_unwrap_symbol(elements[0]));
     for (int j = 0; j < def_slots; j++) {
       if (flow[(i * def_slots) + j].t == JIT_UNKNOWN) {
-	printf("  _____  |", janet_type_names[flow[(i * def_slots) + j].t]);
+	printf("  _____  |");
       } else if (flow[(i * def_slots) + j].t == JIT_OTHER) {
-	printf("  .....  |", janet_type_names[flow[(i * def_slots) + j].t]);
+	printf("  .....  |");
       } else {
 	printf("  %s  |", janet_type_names[flow[(i * def_slots) + j].t]);
       }
@@ -444,7 +451,6 @@ static int jitted_function_gcmark(void *p, size_t size) {
   janet_mark(janet_wrap_function(jitted->fallback));
   return 0;
 }
-
 static void emit_byte(CodeBuffer *code, uint8_t byte) {
   if (code->count >= code->capacity) {
     code->capacity *= 2;
@@ -507,7 +513,7 @@ static void emit_binary_op(CodeBuffer *code, uint8_t op, uint32_t dest, uint32_t
 }
 
 // used for first arg when jumping back to C
-static int arg_loc[] = { 7, 6, 2 };
+static int arg_loc[] = { 7, 6, 2, 1 };
 static void emit_stack_to_arg(CodeBuffer *code, uint32_t dest, uint32_t stack_loc) {
   emit_byte(code, 0x48);
   emit_byte(code, 0x8B);
@@ -515,6 +521,23 @@ static void emit_stack_to_arg(CodeBuffer *code, uint32_t dest, uint32_t stack_lo
   emit_byte(code, 0x24);
   emit_u32(code, stack_loc * sizeof(Janet));
 }
+
+static void emit_non_janet_to_arg(CodeBuffer *code, uint32_t dest, uint32_t stack_loc) {
+  emit_byte(code, 0x48);
+  emit_byte(code, 0x8B);
+  emit_byte(code, 0x84 + (arg_loc[dest] << 3));
+  emit_byte(code, 0x24);
+  emit_u32(code, stack_loc);
+}
+
+static void emit_arg_to_frame(CodeBuffer *code, uint32_t source, uint32_t stack_loc) {
+  emit_byte(code, 0x48);
+  emit_byte(code, 0x89);
+  emit_byte(code, 0x84 + (arg_loc[source] << 3));
+  emit_byte(code, 0x24);
+  emit_u32(code, stack_loc);
+}
+
 
 static void emit_cfun_call(CodeBuffer *code, void *func) {
   emit_byte(code, 0x48);
@@ -544,6 +567,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
 
   JanetFunction *fn = jitted->fallback;
   Janet *constants = fn->def->constants;
+  int call_args_loc = fn->def->slotcount * sizeof(Janet);
   int opcode = instr & 0xFF;
   int a = (instr >> 8) & 0xFF;
   int b = (instr >> 16) & 0xFF;
@@ -1621,12 +1645,14 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     // d = value to push
     // put the error in RDI (first arg)
     emit_stack_to_arg(code, 0, d);
+    emit_non_janet_to_arg(code, 1, call_args_loc);
     emit_cfun_call(code, jit_push);
     break;
   case JOP_PUSH_2:
     // a, e
     emit_stack_to_arg(code, 0, a);
     emit_stack_to_arg(code, 1, e);
+    emit_non_janet_to_arg(code, 2, call_args_loc);
     emit_cfun_call(code, jit_push_2);
     break;
   case JOP_PUSH_3:
@@ -1635,6 +1661,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_stack_to_arg(code, 0, a);
     emit_stack_to_arg(code, 1, b);
     emit_stack_to_arg(code, 2, c);
+    emit_non_janet_to_arg(code, 3, call_args_loc);
     emit_cfun_call(code, jit_push_3);
     break;
     /* case JOP_PUSH_ARRAY: */
@@ -1642,6 +1669,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     // a = dest e = callee
     // put the error in RDI (first arg)
     emit_stack_to_arg(code, 0, e);
+    emit_non_janet_to_arg(code, 1, call_args_loc);
     emit_cfun_call(code, jit_call);
     emit_store_ret(code, a);
     break;
@@ -1649,6 +1677,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     // d = callee
     // put the error in RDI (first arg)
     emit_stack_to_arg(code, 0, d);
+    emit_non_janet_to_arg(code, 1, call_args_loc);
     emit_cfun_call(code, jit_call);
     emit_store_ret(code, a);
     // restore stack
@@ -1858,30 +1887,37 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     }
     break;
   case JOP_MAKE_ARRAY:
+    emit_non_janet_to_arg(code, 0, call_args_loc);
     emit_cfun_call(code, jit_make_array);
     emit_store_ret(code, a);
     break;
   case JOP_MAKE_TUPLE:
+    emit_non_janet_to_arg(code, 0, call_args_loc);
     emit_cfun_call(code, jit_make_tuple);
     emit_store_ret(code, a);
     break;
   case JOP_MAKE_BRACKET_TUPLE:
+    emit_non_janet_to_arg(code, 0, call_args_loc);
     emit_cfun_call(code, jit_make_bracket_tuple);
     emit_store_ret(code, a);
     break;
   case JOP_MAKE_BUFFER:
+    emit_non_janet_to_arg(code, 0, call_args_loc);
     emit_cfun_call(code, jit_make_buffer);
     emit_store_ret(code, a);
     break;
   case JOP_MAKE_STRING:
+    emit_non_janet_to_arg(code, 0, call_args_loc);
     emit_cfun_call(code, jit_make_string);
     emit_store_ret(code, a);
     break;
   case JOP_MAKE_STRUCT:
+    emit_non_janet_to_arg(code, 0, call_args_loc);
     emit_cfun_call(code, jit_make_struct);
     emit_store_ret(code, a);
     break;
   case JOP_MAKE_TABLE:
+    emit_non_janet_to_arg(code, 0, call_args_loc);
     emit_cfun_call(code, jit_make_table);
     emit_store_ret(code, a);
     break;
@@ -1918,7 +1954,7 @@ int jitted_compile(JittedFunction *jitted) {
     0
   };
 
-  int def_size = def_slots * sizeof(Janet);
+  int def_size = def_slots * sizeof(Janet) + 1 * sizeof(CallArgs*);
   int stack_size = ((def_size + 8 + 15) & ~15) - 8;
 
   if (stack_size > 0) {
@@ -1929,6 +1965,7 @@ int jitted_compile(JittedFunction *jitted) {
     emit_u32(&code, stack_size); // Stack-frame size.
   }
 
+  emit_arg_to_frame(&code, 2, def_size - 1 * sizeof(CallArgs*));
   // copy args to stack frame indexes
   for (int i = 0; i < arity; i++) {
     uint32_t offset = i * sizeof(Janet);
@@ -2006,14 +2043,20 @@ static Janet jitted_function_call(void *p, int32_t argc, Janet *argv) {
     jitted_compile(jitted);
   }
 
-
   if (argc == jitted->signature_argc) {
     for (int i = 0; i < argc; i++) {
       if (janet_type(argv[i]) != jitted->signature_arg_types[i]) {
 	janet_panic("mismatching signature!");
       }
     }
-    return ((JitFn)jitted->code)(argc, argv);
+    CallArgs ca = { 0, 0, NULL };
+    Janet res = ((JitFn)jitted->code)(argc, argv, &ca);
+
+    if (ca.capacity > 0) {
+      free(ca.argv);
+    }
+
+    return res;
   } else {
     janet_panic("mismatching signature!");
   }
@@ -2039,9 +2082,12 @@ static const JanetAbstractType jitted_function_type = {
 
 static Janet jit_jitable(int32_t argc, Janet *argv) {
   janet_fixarity(argc, 1);
+  JanetFunction *fn = janet_getfunction(argv, 0);
+  if (fn->def->min_arity != fn->def->max_arity) {
+    janet_panic("only fixed arity functions are supported (today)");
+  }
 
   // todo: disqualify variable arg functions for now
-
   if (cfun_info_count == 0) {
     cfun_info[cfun_info_count].cfun = janet_unwrap_cfunction(janet_resolve_core("math/sin"));
     cfun_info[cfun_info_count++].result = JANET_NUMBER;
@@ -2060,13 +2106,18 @@ static Janet jit_jitable(int32_t argc, Janet *argv) {
     janet_abstract(&jitted_function_type, sizeof(JittedFunction));
 
   jitted->code = NULL;
-  jitted->fallback = janet_getfunction(argv, 0);
-
+  jitted->fallback = fn;
   return janet_wrap_abstract(jitted);
 }
 
 static Janet jit_compiled(int32_t argc, Janet *argv) {
-  return janet_wrap_true();
+  janet_fixarity(argc, 1);
+  JittedFunction *jitted = janet_getabstract(argv, 0, &jitted_function_type);
+  if (jitted->code == NULL) {
+    return janet_wrap_false();
+  } else {
+    return janet_wrap_true();
+  }
 }
 
 static const JanetReg cfuns[] = {
