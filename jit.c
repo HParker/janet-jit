@@ -7,7 +7,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <janet.h>
+#include "janet.h"
 
 #define ENABLE_DATAFLOW_TYPESPECIALIZATION 1
 
@@ -43,9 +43,144 @@ uint64_t jit_in(Janet collection, Janet key) {
   return janet_u64(janet_in(collection, key));
 }
 
+uint64_t jit_binop_helper(Janet lhs, Janet rhs, char *lhs_method, char *rhs_method) {
+  Janet method = janet_get(lhs, janet_ckeywordv(lhs_method));
+  if (!janet_checktype(method, JANET_NIL)) {
+    Janet args[2] = {lhs, rhs};
+    return janet_u64(janet_mcall(lhs_method, 2, args));
+  } else {
+    Janet method = janet_get(rhs, janet_ckeywordv(rhs_method));
+    if (!janet_checktype(method, JANET_NIL)) {
+      Janet args[2] = {rhs, lhs};
+      return janet_u64(janet_mcall(rhs_method, 2, args));
+    } else {
+      janet_panicf("JIT couldn't find method :%s for %v or %s for %v", lhs_method, lhs, rhs_method, rhs);
+    }
+  }
+}
+
+uint64_t jit_unaryop_helper(Janet arg, char *method_name) {
+  Janet method = janet_get(arg, janet_ckeywordv(method_name));
+  if (!janet_checktype(method, JANET_NIL)) {
+    Janet args[1] = {arg};
+    return janet_u64(janet_mcall(method_name, 1, args));
+  } else {
+    janet_panicf("JIT couldn't find method :%s for %v", method, arg);
+  }
+}
+
+// This path can't prove numeric, but still might be numeric
+uint64_t jit_add_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_number(janet_unwrap_number(lhs) + janet_unwrap_number(rhs)));
+  }
+  return jit_binop_helper(lhs, rhs, "+", "r+");
+}
+
+uint64_t jit_sub_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_number(janet_unwrap_number(lhs) - janet_unwrap_number(rhs)));
+  }
+  return jit_binop_helper(lhs, rhs, "-", "r-");
+}
+
+uint64_t jit_mul_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_number(janet_unwrap_number(lhs) * janet_unwrap_number(rhs)));
+  }
+  return jit_binop_helper(lhs, rhs, "*", "r*");
+}
+
+uint64_t jit_div_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_number(janet_unwrap_number(lhs) / janet_unwrap_number(rhs)));
+  }
+  return jit_binop_helper(lhs, rhs, "/", "r/");
+}
+
+// TODO: does divf use a different method when calling a struct/table?
+uint64_t jit_divf_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_number(floor(janet_unwrap_number(lhs) / janet_unwrap_number(rhs))));
+  }
+  return jit_binop_helper(lhs, rhs, "div", "rdiv");
+}
+
+uint64_t jit_rem_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_number(fmod(janet_unwrap_number(lhs), janet_unwrap_number(rhs))));
+  }
+  return jit_binop_helper(lhs, rhs, "%", "r%");
+}
+
+uint64_t jit_mod_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    double x1 = janet_unwrap_number(lhs);
+    double x2 = janet_unwrap_number(rhs);
+    if (x2 == 0) {
+      return janet_u64(janet_wrap_number(x1));
+    } else {
+      double intres = x2 * floor(x1 / x2);
+      return janet_u64(janet_wrap_number(x1 - intres));
+    }
+  }
+  return jit_binop_helper(lhs, rhs, "mod", "rmod");
+}
+
+uint64_t jit_band_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_integer(janet_unwrap_integer(lhs) & janet_unwrap_integer(rhs)));
+  }
+  return jit_binop_helper(lhs, rhs, "&", "r&");
+}
+
+uint64_t jit_bor_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_integer(janet_unwrap_integer(lhs) | janet_unwrap_integer(rhs)));
+  }
+  return jit_binop_helper(lhs, rhs, "|", "r|");
+}
+
+uint64_t jit_bxor_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_integer(janet_unwrap_integer(lhs) ^ janet_unwrap_integer(rhs)));
+  }
+  return jit_binop_helper(lhs, rhs, "^", "r^");
+}
+
+uint64_t jit_bnot_fallback(Janet arg) {
+  if (janet_checktype(arg, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_integer(~janet_unwrap_integer(arg)));
+  }
+  return jit_unaryop_helper(arg, "~");
+}
+
+// TODO: these need range checks
+uint64_t jit_blshift_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_integer(janet_unwrap_integer(lhs) << janet_unwrap_integer(rhs)));
+  }
+  return jit_binop_helper(lhs, rhs, "<<", "r<<");
+}
+
+uint64_t jit_brshift_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_integer(janet_unwrap_integer(lhs) >> janet_unwrap_integer(rhs)));
+  }
+  return jit_binop_helper(lhs, rhs, ">>", "r>>");
+}
+
+uint64_t jit_brushift_fallback(Janet lhs, Janet rhs) {
+  if (janet_checktype(lhs, JANET_NUMBER) && janet_checktype(rhs, JANET_NUMBER)) {
+    return janet_u64(janet_wrap_number((uint32_t)(janet_unwrap_integer(lhs) >> janet_unwrap_integer(rhs))));
+  }
+  return jit_binop_helper(lhs, rhs, ">>", "r>>");
+}
+
+
 // TODO: rename this to poiner/value comparable
 uint64_t jit_u64_orderable(Janet lhs, Janet rhs) {
-    // more types are possible to compare without falling back, but require their own special cases
+  // more types are possible to compare without falling back, but require their own special cases
   return (janet_checktype(lhs, JANET_NUMBER)) &&
     (janet_checktype(rhs, JANET_NUMBER));
 }
@@ -291,7 +426,7 @@ void dataflow(JittedFunction *jitted, int32_t argc, Janet *argv) {
     }
 
     switch (opcode) {
-    case JOP_ADD_IMMEDIATE:
+    case JOP_ADD_IMMEDIATE: // TODO: these are optimistic and not truely correct
     case JOP_ADD:
     case JOP_SUBTRACT_IMMEDIATE:
     case JOP_SUBTRACT:
@@ -403,7 +538,7 @@ void dataflow(JittedFunction *jitted, int32_t argc, Janet *argv) {
 	slot_types[(i * def_slots) + a].t = slot_types[(i * def_slots) + e].result;
       }
       break;
-      }
+    }
     case JOP_MAKE_BUFFER:
       slot_types[(i * def_slots) + d].t = JANET_BUFFER;
       break;
@@ -451,10 +586,18 @@ static int jitted_function_gcmark(void *p, size_t size) {
   janet_mark(janet_wrap_function(jitted->fallback));
   return 0;
 }
+
 static void emit_byte(CodeBuffer *code, uint8_t byte) {
   if (code->count >= code->capacity) {
-    code->capacity *= 2;
-    code->data = realloc(code->data, code->capacity);
+    if (code->count * 2 < SIZE_MAX) {
+      code->capacity *= 2;
+      code->data = realloc(code->data, code->capacity);
+      if (code->data == NULL) {
+	janet_panic("JIT could not allocate while generating bytecode");
+      }
+    } else {
+      janet_panic("JIT ran out of memory generating bytecode");
+    }
   }
   code->data[code->count++] = byte;
 }
@@ -520,6 +663,12 @@ static void emit_stack_to_arg(CodeBuffer *code, uint32_t dest, uint32_t stack_lo
   emit_byte(code, 0x84 + (arg_loc[dest] << 3));
   emit_byte(code, 0x24);
   emit_u32(code, stack_loc * sizeof(Janet));
+}
+
+static void emit_imm_to_arg(CodeBuffer *code, uint32_t dest, uint64_t imm) {
+  emit_byte(code, 0x48);
+  emit_byte(code, 0xB8 + arg_loc[dest]);
+  emit_u64(code, imm);
 }
 
 static void emit_non_janet_to_arg(CodeBuffer *code, uint32_t dest, uint32_t stack_loc) {
@@ -629,319 +778,500 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_byte(code, 0xC3); // ret
     break;
   case JOP_ADD_IMMEDIATE:
-    // lhs -> xmm0
-    emit_stack_to_xmm(code, 0, b);
-    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
-    // rax -> imm1
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x6E);
-    emit_byte(code, 0xC0 + (1 << 3));
-    // +
-    emit_binary_op(code, 0x58, a, 0, 1);
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      // lhs -> xmm0
+      emit_stack_to_xmm(code, 0, b);
+      emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
+      // rax -> imm1
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x6E);
+      emit_byte(code, 0xC0 + (1 << 3));
+      // +
+      emit_binary_op(code, 0x58, a, 0, 1);
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, jit_add_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_ADD:
-    // lhs -> xmm0
-    emit_stack_to_xmm(code, 0, b);
-    // rhs -> xmm1
-    emit_stack_to_xmm(code, 1, c);
-    emit_binary_op(code, 0x58, a, 0, 1);
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      // lhs -> xmm0
+      emit_stack_to_xmm(code, 0, b);
+      // rhs -> xmm1
+      emit_stack_to_xmm(code, 1, c);
+      emit_binary_op(code, 0x58, a, 0, 1);
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_add_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_SUBTRACT_IMMEDIATE:
-    // lhs -> xmm0
-    emit_stack_to_xmm(code, 0, b);
-    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
-    // rax -> imm1
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x6E);
-    emit_byte(code, 0xC0 + (1 << 3));
-    // +
-    emit_binary_op(code, 0x5C, a, 0, 1);
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      // lhs -> xmm0
+      emit_stack_to_xmm(code, 0, b);
+      emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
+      // rax -> imm1
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x6E);
+      emit_byte(code, 0xC0 + (1 << 3));
+      // +
+      emit_binary_op(code, 0x5C, a, 0, 1);
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, jit_sub_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_SUBTRACT:
-    // lhs -> xmm0
-    emit_stack_to_xmm(code, 0, b);
-    // rhs -> xmm1
-    emit_stack_to_xmm(code, 1, c);
-    emit_binary_op(code, 0x5C, a, 0, 1);
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      // lhs -> xmm0
+      emit_stack_to_xmm(code, 0, b);
+      // rhs -> xmm1
+      emit_stack_to_xmm(code, 1, c);
+      emit_binary_op(code, 0x5C, a, 0, 1);
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_sub_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_MULTIPLY_IMMEDIATE:
-    // lhs -> xmm0
-    emit_stack_to_xmm(code, 0, b);
-    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
-    // rax -> imm1
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x6E);
-    emit_byte(code, 0xC0 + (1 << 3));
-    // +
-    emit_binary_op(code, 0x59, a, 0, 1);
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      // lhs -> xmm0
+      emit_stack_to_xmm(code, 0, b);
+      emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
+      // rax -> imm1
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x6E);
+      emit_byte(code, 0xC0 + (1 << 3));
+      // +
+      emit_binary_op(code, 0x59, a, 0, 1);
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, jit_mul_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_MULTIPLY:
-    // lhs -> xmm0
-    emit_stack_to_xmm(code, 0, b);
-    // rhs -> xxm1
-    emit_stack_to_xmm(code, 1, c);
-    emit_binary_op(code, 0x59, a, 0, 1);
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      // lhs -> xmm0
+      emit_stack_to_xmm(code, 0, b);
+      // rhs -> xxm1
+      emit_stack_to_xmm(code, 1, c);
+      emit_binary_op(code, 0x59, a, 0, 1);
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_mul_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_DIVIDE_IMMEDIATE:
-    // lhs -> xmm0
-    emit_stack_to_xmm(code, 0, b);
-    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
-    // rax -> imm1
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x6E);
-    emit_byte(code, 0xC0 + (1 << 3));
-    // +
-    emit_binary_op(code, 0x5E, a, 0, 1);
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      // lhs -> xmm0
+      emit_stack_to_xmm(code, 0, b);
+      emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
+      // rax -> imm1
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x6E);
+      emit_byte(code, 0xC0 + (1 << 3));
+      // +
+      emit_binary_op(code, 0x5E, a, 0, 1);
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, jit_div_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_DIVIDE:
-    // lhs -> xxm0
-    emit_stack_to_xmm(code, 0, b);
-    // rhs -> xxm1
-    emit_stack_to_xmm(code, 1, c);
-    emit_binary_op(code, 0x5E, a, 0, 1);
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+
+      // lhs -> xxm0
+      emit_stack_to_xmm(code, 0, b);
+      // rhs -> xxm1
+      emit_stack_to_xmm(code, 1, c);
+      emit_binary_op(code, 0x5E, a, 0, 1);
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_div_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_DIVIDE_FLOOR:
-    // lhs -> xxm0
-    emit_stack_to_xmm(code, 0, b);
-    // rhs -> xxm1
-    emit_stack_to_xmm(code, 1, c);
-    emit_binary_op(code, 0x5E, a, 0, 1);
-    // floor(xmm0)
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x3A);
-    emit_byte(code, 0x0B);
-    emit_byte(code, 0xC0 + (0 << 3) + 0);
-    emit_byte(code, 0x01); // <- round instead of trunc
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      // lhs -> xxm0
+      emit_stack_to_xmm(code, 0, b);
+      // rhs -> xxm1
+      emit_stack_to_xmm(code, 1, c);
+      emit_binary_op(code, 0x5E, a, 0, 1);
+      // floor(xmm0)
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x3A);
+      emit_byte(code, 0x0B);
+      emit_byte(code, 0xC0 + (0 << 3) + 0);
+      emit_byte(code, 0x01); // <- round instead of trunc
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_divf_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_MODULO:
-    // a - truncate(a / b) * b
-    // a -> xmm0
-    emit_stack_to_xmm(code, 0, b);
-    // a -> xmm1
-    emit_stack_to_xmm(code, 1, b);
-    // b -> xmm2
-    emit_stack_to_xmm(code, 2, c);
-    // xmm1 / xmm2
-    emit_binary_op(code, 0x5E, a, 1, 2);
-    // floor(xmm1)
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x3A);
-    emit_byte(code, 0x0B);
-    emit_byte(code, 0xC0 + (1 << 3) + 1);
-    emit_byte(code, 0x01); // <- round instead of trunc
-    // xmm1 * xmm2
-    emit_binary_op(code, 0x59, a, 1, 2);
-    // xmm0 - xmm1
-    emit_binary_op(code, 0x5C, a, 0, 1);
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      // a - truncate(a / b) * b
+      // a -> xmm0
+      emit_stack_to_xmm(code, 0, b);
+      // a -> xmm1
+      emit_stack_to_xmm(code, 1, b);
+      // b -> xmm2
+      emit_stack_to_xmm(code, 2, c);
+      // xmm1 / xmm2
+      emit_binary_op(code, 0x5E, a, 1, 2);
+      // floor(xmm1)
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x3A);
+      emit_byte(code, 0x0B);
+      emit_byte(code, 0xC0 + (1 << 3) + 1);
+      emit_byte(code, 0x01); // <- round instead of trunc
+      // xmm1 * xmm2
+      emit_binary_op(code, 0x59, a, 1, 2);
+      // xmm0 - xmm1
+      emit_binary_op(code, 0x5C, a, 0, 1);
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_mod_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_REMAINDER:
-    // a - truncate(a / b) * b
-    // a -> xmm0
-    emit_stack_to_xmm(code, 0, b);
-    // a -> xmm1
-    emit_stack_to_xmm(code, 1, b);
-    // b -> xmm2
-    emit_stack_to_xmm(code, 2, c);
-    // xmm1 / xmm2
-    emit_binary_op(code, 0x5E, a, 1, 2);
-    // trunc(xmm1)
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x3A);
-    emit_byte(code, 0x0B);
-    emit_byte(code, 0xC0 + (1 << 3) + 1);
-    emit_byte(code, 0x03); // <- trunc instead of round
-    // xmm1 * xmm2
-    emit_binary_op(code, 0x59, a, 1, 2);
-    // xmm0 - xmm1
-    emit_binary_op(code, 0x5C, a, 0, 1);
-    // lhs -> rsp + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      // a - truncate(a / b) * b
+      // a -> xmm0
+      emit_stack_to_xmm(code, 0, b);
+      // a -> xmm1
+      emit_stack_to_xmm(code, 1, b);
+      // b -> xmm2
+      emit_stack_to_xmm(code, 2, c);
+      // xmm1 / xmm2
+      emit_binary_op(code, 0x5E, a, 1, 2);
+      // trunc(xmm1)
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x3A);
+      emit_byte(code, 0x0B);
+      emit_byte(code, 0xC0 + (1 << 3) + 1);
+      emit_byte(code, 0x03); // <- trunc instead of round
+      // xmm1 * xmm2
+      emit_binary_op(code, 0x59, a, 1, 2);
+      // xmm0 - xmm1
+      emit_binary_op(code, 0x5C, a, 0, 1);
+      // lhs -> rsp + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_rem_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_BAND:
-    // lhs -> RAX
-    emit_stack_to_gpr(code, 0, b);
-    // rhs -> RCX
-    emit_stack_to_gpr(code, 1, c);
-    // (band rax rcx)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x21); // and
-    emit_byte(code, 0xC8);
-    // rax -> xxm0
-    emit_byte(code, 0xF2);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2A);
-    emit_byte(code, 0xC0);
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      // lhs -> RAX
+      emit_stack_to_gpr(code, 0, b);
+      // rhs -> RCX
+      emit_stack_to_gpr(code, 1, c);
+      // (band rax rcx)
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x21); // and
+      emit_byte(code, 0xC8);
+      // rax -> xxm0
+      emit_byte(code, 0xF2);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2A);
+      emit_byte(code, 0xC0);
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_band_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_BOR:
-    // lhs -> RAX
-    emit_stack_to_gpr(code, 0, b);
-    // rhs -> RCX
-    emit_stack_to_gpr(code, 1, c);
-    // (band rax rcx)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x09); // or
-    emit_byte(code, 0xC8);
-    // rax -> xxm0
-    emit_byte(code, 0xF2);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2A);
-    emit_byte(code, 0xC0);
-    // xmm0 -> rsi + offset
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      // lhs -> RAX
+      emit_stack_to_gpr(code, 0, b);
+      // rhs -> RCX
+      emit_stack_to_gpr(code, 1, c);
+      // (band rax rcx)
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09); // or
+      emit_byte(code, 0xC8);
+      // rax -> xxm0
+      emit_byte(code, 0xF2);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2A);
+      emit_byte(code, 0xC0);
+      // xmm0 -> rsi + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_bor_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_BXOR:
-    // lhs -> RAX
-    emit_stack_to_gpr(code, 0, b);
-    // rhs -> RCX
-    emit_stack_to_gpr(code, 1, c);
-    // (bxor rax rcx)
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x31); // xor
-    emit_byte(code, 0xC8);
-    // rax -> xxm0
-    emit_byte(code, 0xF2);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2A);
-    emit_byte(code, 0xC0);
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      // lhs -> RAX
+      emit_stack_to_gpr(code, 0, b);
+      // rhs -> RCX
+      emit_stack_to_gpr(code, 1, c);
+      // (bxor rax rcx)
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x31); // xor
+      emit_byte(code, 0xC8);
+      // rax -> xxm0
+      emit_byte(code, 0xF2);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2A);
+      emit_byte(code, 0xC0);
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_bxor_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_BNOT:
-    // e = value
-    // value -> RAX
-    emit_stack_to_gpr(code, 0, e);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xF7);
-    emit_byte(code, 0xD0); // NOT
+    if (1 && ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + e].t == JANET_NUMBER) {
+      // e = value
+      // value -> RAX
+      emit_stack_to_gpr(code, 0, e);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0xF7);
+      emit_byte(code, 0xD0); // NOT
 
-    // rax -> xxm0
-    emit_byte(code, 0xF2);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2A);
-    emit_byte(code, 0xC0);
-    // xmm0 -> rsi + offset
-    emit_xmm_to_stack(code, a, 0);
+      // rax -> xxm0
+      emit_byte(code, 0xF2);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2A);
+      emit_byte(code, 0xC0);
+      // xmm0 -> rsi + offset
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, e);
+      emit_cfun_call(code, jit_bnot_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_SHIFT_LEFT:
-    emit_stack_to_gpr(code, 0, b);
-    emit_stack_to_gpr(code, 1, c);
-    // blshift
-    emit_byte(code, 0xD3);
-    emit_byte(code, 0xE0);
-    // rax -> xmm0
-    emit_byte(code, 0xF2);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2A);
-    emit_byte(code, 0xC0);
-    // xmm0 -> stack
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      emit_stack_to_gpr(code, 0, b);
+      emit_stack_to_gpr(code, 1, c);
+      // blshift
+      emit_byte(code, 0xD3);
+      emit_byte(code, 0xE0);
+      // rax -> xmm0
+      emit_byte(code, 0xF2);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2A);
+      emit_byte(code, 0xC0);
+      // xmm0 -> stack
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_blshift_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_SHIFT_LEFT_IMMEDIATE:
-    emit_stack_to_gpr(code, 0, b);
-    // shift imm8
-    emit_byte(code, 0xC1);
-    emit_byte(code, 0xE0);
-    emit_byte(code, c);
-    // rax -> xmm0
-    emit_byte(code, 0xF2);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2A);
-    emit_byte(code, 0xC0);
-    // xmm0 -> stack
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      emit_stack_to_gpr(code, 0, b);
+      // shift imm8
+      emit_byte(code, 0xC1);
+      emit_byte(code, 0xE0);
+      emit_byte(code, c); // Is this really C or is it imm8?
+      // rax -> xmm0
+      emit_byte(code, 0xF2);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2A);
+      emit_byte(code, 0xC0);
+      // xmm0 -> stack
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, jit_blshift_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_SHIFT_RIGHT:
-    emit_stack_to_gpr(code, 0, b);
-    emit_stack_to_gpr(code, 1, c);
-    // brshift
-    emit_byte(code, 0xD3);
-    emit_byte(code, 0xF8);
-    // rax -> xmm0
-    emit_byte(code, 0xF2);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2A);
-    emit_byte(code, 0xC0);
-    // xmm0 -> stack
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      emit_stack_to_gpr(code, 0, b);
+      emit_stack_to_gpr(code, 1, c);
+      // brshift
+      emit_byte(code, 0xD3);
+      emit_byte(code, 0xF8);
+      // rax -> xmm0
+      emit_byte(code, 0xF2);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2A);
+      emit_byte(code, 0xC0);
+      // xmm0 -> stack
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_brshift_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_SHIFT_RIGHT_IMMEDIATE:
-    emit_stack_to_gpr(code, 0, b);
-    // shift
-    emit_byte(code, 0xC1);
-    emit_byte(code, 0xF8);
-    emit_byte(code, c);
-    // rax -> xmm0
-    emit_byte(code, 0xF2);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2A);
-    emit_byte(code, 0xC0);
-    // xmm0 -> stack
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      emit_stack_to_gpr(code, 0, b);
+      // shift
+      emit_byte(code, 0xC1);
+      emit_byte(code, 0xF8);
+      emit_byte(code, c);
+      // rax -> xmm0
+      emit_byte(code, 0xF2);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2A);
+      emit_byte(code, 0xC0);
+      // xmm0 -> stack
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, jit_brshift_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_SHIFT_RIGHT_UNSIGNED:
-    emit_stack_to_gpr(code, 0, b);
-    emit_stack_to_gpr(code, 1, c);
-    // brshift
-    emit_byte(code, 0xD3);
-    emit_byte(code, 0xF8);
-    // rax -> xmm0
-    emit_byte(code, 0xF2);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2A);
-    emit_byte(code, 0xC0);
-    // xmm0 -> stack
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      emit_stack_to_gpr(code, 0, b);
+      emit_stack_to_gpr(code, 1, c);
+      // brshift
+      emit_byte(code, 0xD3);
+      emit_byte(code, 0xE8); // SHR
+      // rax -> xmm0
+      emit_byte(code, 0xF2);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2A);
+      emit_byte(code, 0xC0);
+      // xmm0 -> stack
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, jit_brushift_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_SHIFT_RIGHT_UNSIGNED_IMMEDIATE:
-    emit_stack_to_gpr(code, 0, b);
-    // shift
-    emit_byte(code, 0xC1);
-    emit_byte(code, 0xF8);
-    emit_byte(code, c);
-    // rax -> xmm0
-    emit_byte(code, 0xF2);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2A);
-    emit_byte(code, 0xC0);
-    // xmm0 -> stack
-    emit_xmm_to_stack(code, a, 0);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      emit_stack_to_gpr(code, 0, b);
+      // shift
+      emit_byte(code, 0xC1);
+      emit_byte(code, 0xF8);
+      emit_byte(code, c);
+      // rax -> xmm0
+      emit_byte(code, 0xF2);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2A);
+      emit_byte(code, 0xC0);
+      // xmm0 -> stack
+      emit_xmm_to_stack(code, a, 0);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, jit_brshift_fallback);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_MOVE_FAR:
     emit_stack_to_xmm(code, 0, a);
@@ -961,17 +1291,8 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     break;
   case JOP_JUMP_IF:
     // a -> arg 1
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x8B);
-    emit_byte(code, 0x84 + (7 << 3));
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
-    // test if truthy in interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)janet_truthy);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_stack_to_arg(code, 0, a);
+    emit_cfun_call(code, janet_truthy);
     // compare
     emit_byte(code, 0x85);
     emit_byte(code, 0xC0);
@@ -986,12 +1307,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     break;
   case JOP_JUMP_IF_NOT:
     emit_stack_to_arg(code, 0, a);
-    // test if truthy in interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)janet_truthy);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_cfun_call(code, janet_truthy);
     // compare
     emit_byte(code, 0x85);
     emit_byte(code, 0xC0);
@@ -1006,12 +1322,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     break;
   case JOP_JUMP_IF_NIL:
     emit_stack_to_arg(code, 0, a);
-    // test if truthy in interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_nil);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_cfun_call(code, jit_nil);
     // compare
     emit_byte(code, 0x85);
     emit_byte(code, 0xC0);
@@ -1026,12 +1337,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     break;
   case JOP_JUMP_IF_NOT_NIL:
     emit_stack_to_arg(code, 0, a);
-    // test if truthy in interpreter
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, (uint64_t)(uintptr_t)jit_nil);
-    emit_byte(code, 0xFF);
-    emit_byte(code, 0xD0);
+    emit_cfun_call(code, jit_nil);
     // compare
     emit_byte(code, 0x85);
     emit_byte(code, 0xC0);
@@ -1045,220 +1351,368 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     emit_u32(code, 0);
     break;
   case JOP_GREATER_THAN:
-    emit_stack_to_xmm(code, 0, b);
-    emit_stack_to_xmm(code, 1, c);
-    // ucomisd left, right sets ZF when equal and PF when either value is NaN
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2E);
-    emit_byte(code, 0xC0 + (0 << 3) + 1);
-    // set AL based on result of comparison
-    // AL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x97); // SETA
-    emit_byte(code, 0xC0); // AL
-    // DL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x9B); // SETNP - make nan not equal
-    emit_byte(code, 0xC2); // DL
-    // (and al dl)
-    emit_byte(code, 0x20);
-    emit_byte(code, 0xD0);
-    // store al
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0xB6);
-    emit_byte(code, 0xD0); // MOVZX EDX, AL.
-    // false -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_false()));
-     // OR RAX, RDX
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x09);
-    emit_byte(code, 0xD0);
-    emit_store_ret(code, a);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      emit_stack_to_xmm(code, 0, b);
+      emit_stack_to_xmm(code, 1, c);
+      // ucomisd left, right sets ZF when equal and PF when either value is NaN
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2E);
+      emit_byte(code, 0xC0 + (0 << 3) + 1);
+      // set AL based on result of comparison
+      // AL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x97); // SETA
+      emit_byte(code, 0xC0); // AL
+      // DL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9B); // SETNP - make nan not equal
+      emit_byte(code, 0xC2); // DL
+      // (and al dl)
+      emit_byte(code, 0x20);
+      emit_byte(code, 0xD0);
+      // store al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0); // MOVZX EDX, AL.
+      // false -> rax
+      emit_byte(code, 0x48);
+      emit_byte(code, 0xB8);
+      emit_u64(code, janet_u64(janet_wrap_false()));
+      // OR RAX, RDX
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0);
+      emit_store_ret(code, a);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, janet_compare);
+      // test eax, eax
+      emit_byte(code, 0x85);
+      emit_byte(code, 0xC0);
+      // setg al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9F);
+      emit_byte(code, 0xC0);
+      // movzx edx, al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0);
+      // Box the 0/1 as a Janet boolean
+      emit_imm_rax(code, janet_u64(janet_wrap_false()));
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0); // or rax, rdx
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_GREATER_THAN_IMMEDIATE:
-    emit_stack_to_xmm(code, 0, b);
-    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
-    // rax -> imm1
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x6E);
-    emit_byte(code, 0xC0 + (1 << 3));
-    // ucomisd left, right sets ZF when equal and PF when either value is NaN
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2E);
-    emit_byte(code, 0xC0 + (0 << 3) + 1);
-    // set AL based on result of comparison
-    // AL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x97); // SETA
-    emit_byte(code, 0xC0); // AL
-    // DL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x9B); // SETNP - make nan not equal
-    emit_byte(code, 0xC2); // DL
-    // (and al dl)
-    emit_byte(code, 0x20);
-    emit_byte(code, 0xD0);
-    // store al
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0xB6);
-    emit_byte(code, 0xD0); // MOVZX EDX, AL.
-    // false -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_false()));
-     // OR RAX, RDX
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x09);
-    emit_byte(code, 0xD0);
-    emit_store_ret(code, a);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      emit_stack_to_xmm(code, 0, b);
+      emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
+      // rax -> imm1
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x6E);
+      emit_byte(code, 0xC0 + (1 << 3));
+      // ucomisd left, right sets ZF when equal and PF when either value is NaN
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2E);
+      emit_byte(code, 0xC0 + (0 << 3) + 1);
+      // set AL based on result of comparison
+      // AL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x97); // SETA
+      emit_byte(code, 0xC0); // AL
+      // DL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9B); // SETNP - make nan not equal
+      emit_byte(code, 0xC2); // DL
+      // (and al dl)
+      emit_byte(code, 0x20);
+      emit_byte(code, 0xD0);
+      // store al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0); // MOVZX EDX, AL.
+      // false -> rax
+      emit_byte(code, 0x48);
+      emit_byte(code, 0xB8);
+      emit_u64(code, janet_u64(janet_wrap_false()));
+      // OR RAX, RDX
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0);
+      emit_store_ret(code, a);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, janet_compare);
+      // test eax, eax
+      emit_byte(code, 0x85);
+      emit_byte(code, 0xC0);
+      // setg al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9F);
+      emit_byte(code, 0xC0);
+      // movzx edx, al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0);
+      // Box the 0/1 as a Janet boolean
+      emit_imm_rax(code, janet_u64(janet_wrap_false()));
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0); // or rax, rdx
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_GREATER_THAN_EQUAL:
-    emit_stack_to_xmm(code, 0, b);
-    emit_stack_to_xmm(code, 1, c);
-    // ucomisd left, right sets ZF when equal and PF when either value is NaN
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2E);
-    emit_byte(code, 0xC0 + (0 << 3) + 1);
-    // set AL based on result of comparison
-    // AL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x93); // SETAE
-    emit_byte(code, 0xC0); // AL
-    // DL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x9B); // SETNP - make nan not equal
-    emit_byte(code, 0xC2); // DL
-    // (and al dl)
-    emit_byte(code, 0x20);
-    emit_byte(code, 0xD0);
-    // store al
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0xB6);
-    emit_byte(code, 0xD0); // MOVZX EDX, AL.
-    // false -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_false()));
-     // OR RAX, RDX
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x09);
-    emit_byte(code, 0xD0);
-    emit_store_ret(code, a);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      emit_stack_to_xmm(code, 0, b);
+      emit_stack_to_xmm(code, 1, c);
+      // ucomisd left, right sets ZF when equal and PF when either value is NaN
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2E);
+      emit_byte(code, 0xC0 + (0 << 3) + 1);
+      // set AL based on result of comparison
+      // AL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x93); // SETAE
+      emit_byte(code, 0xC0); // AL
+      // DL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9B); // SETNP - make nan not equal
+      emit_byte(code, 0xC2); // DL
+      // (and al dl)
+      emit_byte(code, 0x20);
+      emit_byte(code, 0xD0);
+      // store al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0); // MOVZX EDX, AL.
+      // false -> rax
+      emit_byte(code, 0x48);
+      emit_byte(code, 0xB8);
+      emit_u64(code, janet_u64(janet_wrap_false()));
+      // OR RAX, RDX
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0);
+      emit_store_ret(code, a);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, janet_compare);
+      // test eax, eax
+      emit_byte(code, 0x85);
+      emit_byte(code, 0xC0);
+      // setge al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9D); // SETGE
+      emit_byte(code, 0xC0);
+      // movzx edx, al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0);
+      // Box the 0/1 as a Janet boolean
+      emit_imm_rax(code, janet_u64(janet_wrap_false()));
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0); // or rax, rdx
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_LESS_THAN:
-    emit_stack_to_xmm(code, 0, b);
-    emit_stack_to_xmm(code, 1, c);
-    // ucomisd left, right sets ZF when equal and PF when either value is NaN
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2E);
-    emit_byte(code, 0xC0 + (0 << 3) + 1);
-    // set AL based on result of comparison
-    // AL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x92); // SETB
-    emit_byte(code, 0xC0); // AL
-    // DL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x9B); // SETNP - make nan not equal
-    emit_byte(code, 0xC2); // DL
-    // (and al dl)
-    emit_byte(code, 0x20);
-    emit_byte(code, 0xD0);
-    // store al
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0xB6);
-    emit_byte(code, 0xD0); // MOVZX EDX, AL.
-    // false -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_false()));
-     // OR RAX, RDX
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x09);
-    emit_byte(code, 0xD0);
-    emit_store_ret(code, a);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      emit_stack_to_xmm(code, 0, b);
+      emit_stack_to_xmm(code, 1, c);
+      // ucomisd left, right sets ZF when equal and PF when either value is NaN
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2E);
+      emit_byte(code, 0xC0 + (0 << 3) + 1);
+      // set AL based on result of comparison
+      // AL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x92); // SETB
+      emit_byte(code, 0xC0); // AL
+      // DL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9B); // SETNP - make nan not equal
+      emit_byte(code, 0xC2); // DL
+      // (and al dl)
+      emit_byte(code, 0x20);
+      emit_byte(code, 0xD0);
+      // store al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0); // MOVZX EDX, AL.
+      // false -> rax
+      emit_byte(code, 0x48);
+      emit_byte(code, 0xB8);
+      emit_u64(code, janet_u64(janet_wrap_false()));
+      // OR RAX, RDX
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0);
+      emit_store_ret(code, a);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, janet_compare);
+      // test eax, eax
+      emit_byte(code, 0x85);
+      emit_byte(code, 0xC0);
+      // setl al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9C); // SETL
+      emit_byte(code, 0xC0);
+      // movzx edx, al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0);
+      // Box the 0/1 as a Janet boolean
+      emit_imm_rax(code, janet_u64(janet_wrap_false()));
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0); // or rax, rdx
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_LESS_THAN_IMMEDIATE:
-    emit_stack_to_xmm(code, 0, b);
-    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
-    // rax -> xmm1
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x6E);
-    emit_byte(code, 0xC0 + (1 << 3));
-    // ucomisd left, right sets ZF when equal and PF when either value is NaN
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2E);
-    emit_byte(code, 0xC0 + (0 << 3) + 1);
-    // set AL based on result of comparison
-    // AL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x92); // SETB
-    emit_byte(code, 0xC0); // AL
-    // DL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x9B); // SETNP - make nan not equal
-    emit_byte(code, 0xC2); // DL
-    // (and al dl)
-    emit_byte(code, 0x20);
-    emit_byte(code, 0xD0);
-    // store al
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0xB6);
-    emit_byte(code, 0xD0); // MOVZX EDX, AL.
-    // false -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_false()));
-     // OR RAX, RDX
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x09);
-    emit_byte(code, 0xD0);
-    emit_store_ret(code, a);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      emit_stack_to_xmm(code, 0, b);
+      emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
+      // rax -> xmm1
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x6E);
+      emit_byte(code, 0xC0 + (1 << 3));
+      // ucomisd left, right sets ZF when equal and PF when either value is NaN
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2E);
+      emit_byte(code, 0xC0 + (0 << 3) + 1);
+      // set AL based on result of comparison
+      // AL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x92); // SETB
+      emit_byte(code, 0xC0); // AL
+      // DL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9B); // SETNP - make nan not equal
+      emit_byte(code, 0xC2); // DL
+      // (and al dl)
+      emit_byte(code, 0x20);
+      emit_byte(code, 0xD0);
+      // store al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0); // MOVZX EDX, AL.
+      // false -> rax
+      emit_byte(code, 0x48);
+      emit_byte(code, 0xB8);
+      emit_u64(code, janet_u64(janet_wrap_false()));
+      // OR RAX, RDX
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0);
+      emit_store_ret(code, a);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, janet_compare);
+      // test eax, eax
+      emit_byte(code, 0x85);
+      emit_byte(code, 0xC0);
+      // setl al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9C); // SETL
+      emit_byte(code, 0xC0);
+      // movzx edx, al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0);
+      // Box the 0/1 as a Janet boolean
+      emit_imm_rax(code, janet_u64(janet_wrap_false()));
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0); // or rax, rdx
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_LESS_THAN_EQUAL:
-    emit_stack_to_xmm(code, 0, b);
-    emit_stack_to_xmm(code, 1, c);
-    // ucomisd left, right sets ZF when equal and PF when either value is NaN
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2E);
-    emit_byte(code, 0xC0 + (0 << 3) + 1);
-    // set AL based on result of comparison
-    // AL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x96); // SETBE
-    emit_byte(code, 0xC0); // AL
-    // DL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x9B); // SETNP - make nan not equal
-    emit_byte(code, 0xC2); // DL
-    // (and al dl)
-    emit_byte(code, 0x20);
-    emit_byte(code, 0xD0);
-    // store al
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0xB6);
-    emit_byte(code, 0xD0); // MOVZX EDX, AL.
-    // false -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_false()));
-    // OR RAX, RDX
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x09);
-    emit_byte(code, 0xD0);
-    emit_store_ret(code, a);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+      emit_stack_to_xmm(code, 0, b);
+      emit_stack_to_xmm(code, 1, c);
+      // ucomisd left, right sets ZF when equal and PF when either value is NaN
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2E);
+      emit_byte(code, 0xC0 + (0 << 3) + 1);
+      // set AL based on result of comparison
+      // AL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x96); // SETBE
+      emit_byte(code, 0xC0); // AL
+      // DL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9B); // SETNP - make nan not equal
+      emit_byte(code, 0xC2); // DL
+      // (and al dl)
+      emit_byte(code, 0x20);
+      emit_byte(code, 0xD0);
+      // store al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0); // MOVZX EDX, AL.
+      // false -> rax
+      emit_byte(code, 0x48);
+      emit_byte(code, 0xB8);
+      emit_u64(code, janet_u64(janet_wrap_false()));
+      // OR RAX, RDX
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0);
+      emit_store_ret(code, a);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_stack_to_arg(code, 1, c);
+      emit_cfun_call(code, janet_compare);
+      // test eax, eax
+      emit_byte(code, 0x85);
+      emit_byte(code, 0xC0);
+      // setle al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9E); // SETLE
+      emit_byte(code, 0xC0);
+      // movzx edx, al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0);
+      // Box the 0/1 as a Janet boolean
+      emit_imm_rax(code, janet_u64(janet_wrap_false()));
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0); // or rax, rdx
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_EQUALS:
     if (ENABLE_DATAFLOW_TYPESPECIALIZATION && jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
@@ -1297,7 +1751,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_byte(code, 0xD0);
       emit_store_ret(code, a);
     } else if (ENABLE_DATAFLOW_TYPESPECIALIZATION && jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_KEYWORD &&
-	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_KEYWORD) {
+	       jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_KEYWORD) {
       /* printf("emitting keyword fast path\n"); */
       // lhs RDI
       emit_byte(code, 0x48);
@@ -1336,55 +1790,62 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     } else {
       emit_stack_to_arg(code, 0, b);
       emit_stack_to_arg(code, 1, c);
-      // go back to the interpreter
       emit_cfun_call(code, jit_equals);
       emit_store_ret(code, a);
     }
     break;
   case JOP_EQUALS_IMMEDIATE:
-    emit_stack_to_xmm(code, 0, b);
-    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
-    // rax -> imm1
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x6E);
-    emit_byte(code, 0xC0 + (1 << 3));
-    // ucomisd left, right sets ZF when equal and PF when either value is NaN
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2E);
-    emit_byte(code, 0xC0 + (0 << 3) + 1);
-    // set AL based on result of comparison
-    // AL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x94); // SETE
-    emit_byte(code, 0xC0); // AL
-    // DL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x9B); // SETNP - make nan not equal
-    emit_byte(code, 0xC2); // DL
-    // (and al dl)
-    emit_byte(code, 0x20);
-    emit_byte(code, 0xD0);
-    // store al
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0xB6);
-    emit_byte(code, 0xD0); // MOVZX EDX, AL.
-    // false -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_false()));
-     // OR RAX, RDX
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x09);
-    emit_byte(code, 0xD0);
-    // RAX -> stack + offset
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x89);
-    emit_byte(code, 0x84);
-    emit_byte(code, 0x24);
-    emit_u32(code, a * sizeof(Janet));
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      emit_stack_to_xmm(code, 0, b);
+      emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
+      // rax -> imm1
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x6E);
+      emit_byte(code, 0xC0 + (1 << 3));
+      // ucomisd left, right sets ZF when equal and PF when either value is NaN
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2E);
+      emit_byte(code, 0xC0 + (0 << 3) + 1);
+      // set AL based on result of comparison
+      // AL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x94); // SETE
+      emit_byte(code, 0xC0); // AL
+      // DL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9B); // SETNP - make nan not equal
+      emit_byte(code, 0xC2); // DL
+      // (and al dl)
+      emit_byte(code, 0x20);
+      emit_byte(code, 0xD0);
+      // store al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0); // MOVZX EDX, AL.
+      // false -> rax
+      emit_byte(code, 0x48);
+      emit_byte(code, 0xB8);
+      emit_u64(code, janet_u64(janet_wrap_false()));
+      // OR RAX, RDX
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0);
+      // RAX -> stack + offset
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x89);
+      emit_byte(code, 0x84);
+      emit_byte(code, 0x24);
+      emit_u32(code, a * sizeof(Janet));
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, jit_equals);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_NOT_EQUALS:
     if (ENABLE_DATAFLOW_TYPESPECIALIZATION && jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER &&
@@ -1428,7 +1889,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_byte(code, 0x24);
       emit_u32(code, a * sizeof(Janet));
     } else if (ENABLE_DATAFLOW_TYPESPECIALIZATION && jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_KEYWORD &&
-	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_KEYWORD) {
+	       jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_KEYWORD) {
       /* printf("emitting keyword fast path\n"); */
       emit_stack_to_arg(code, 0, b);
       emit_stack_to_arg(code, 1, c);
@@ -1455,55 +1916,62 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_byte(code, 0xD0);
       emit_store_ret(code, a);
     } else {
-      // lhs RDI
       emit_stack_to_arg(code, 0, b);
-      // rhs RSI
       emit_stack_to_arg(code, 1, c);
       emit_cfun_call(code, jit_not_equals);
       emit_store_ret(code, a);
     }
     break;
   case JOP_NOT_EQUALS_IMMEDIATE:
-    emit_stack_to_xmm(code, 0, b);
-    emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
-    // rax -> imm1
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x6E);
-    emit_byte(code, 0xC0 + (1 << 3));
-    // ucomisd left, right sets ZF when equal and PF when either value is NaN
-    emit_byte(code, 0x66);
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x2E);
-    emit_byte(code, 0xC0 + (0 << 3) + 1);
-    // set AL based on result of comparison
-    // AL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x95); // SETNE
-    emit_byte(code, 0xC0); // AL
-    // DL
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0x9A); // SETP - make nan not equal
-    emit_byte(code, 0xC2); // DL
-    // (or al dl)
-    emit_byte(code, 0x08);
-    emit_byte(code, 0xD0);
-    // store al
-    emit_byte(code, 0x0F);
-    emit_byte(code, 0xB6);
-    emit_byte(code, 0xD0); // MOVZX EDX, AL.
-    // false -> rax
-    emit_byte(code, 0x48);
-    emit_byte(code, 0xB8);
-    emit_u64(code, janet_u64(janet_wrap_false()));
-    // OR RAX, RDX
-    emit_byte(code, 0x48);
-    emit_byte(code, 0x09);
-    emit_byte(code, 0xD0);
-    emit_store_ret(code, a);
+    if (ENABLE_DATAFLOW_TYPESPECIALIZATION && jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_NUMBER) {
+      emit_stack_to_xmm(code, 0, b);
+      emit_imm_rax(code, janet_u64(janet_wrap_integer(imm8)));
+      // rax -> imm1
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x6E);
+      emit_byte(code, 0xC0 + (1 << 3));
+      // ucomisd left, right sets ZF when equal and PF when either value is NaN
+      emit_byte(code, 0x66);
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x2E);
+      emit_byte(code, 0xC0 + (0 << 3) + 1);
+      // set AL based on result of comparison
+      // AL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x95); // SETNE
+      emit_byte(code, 0xC0); // AL
+      // DL
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0x9A); // SETP - make nan not equal
+      emit_byte(code, 0xC2); // DL
+      // (or al dl)
+      emit_byte(code, 0x08);
+      emit_byte(code, 0xD0);
+      // store al
+      emit_byte(code, 0x0F);
+      emit_byte(code, 0xB6);
+      emit_byte(code, 0xD0); // MOVZX EDX, AL.
+      // false -> rax
+      emit_byte(code, 0x48);
+      emit_byte(code, 0xB8);
+      emit_u64(code, janet_u64(janet_wrap_false()));
+      // OR RAX, RDX
+      emit_byte(code, 0x48);
+      emit_byte(code, 0x09);
+      emit_byte(code, 0xD0);
+      emit_store_ret(code, a);
+    } else {
+      emit_stack_to_arg(code, 0, b);
+      emit_imm_to_arg(code, 1, janet_u64(janet_wrap_integer(imm8)));
+      emit_cfun_call(code, jit_not_equals);
+      emit_store_ret(code, a);
+    }
     break;
   case JOP_COMPARE:
+    // TODO: this is a nice example of a runtime condition,
+    //       but we should emit compile time specialized code.
     // check numeric for fast path
     // b = lhs c = rhs
     // lhs 7 (first arg)
@@ -1712,8 +2180,8 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
     // b = collection, c = key
     // collection arg 1 (7)
     if (ENABLE_DATAFLOW_TYPESPECIALIZATION &&
-	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_TUPLE
-	&& jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
+	jitted->flow[(pc * fn->def->slotcount) + b].t == JANET_TUPLE &&
+	jitted->flow[(pc * fn->def->slotcount) + c].t == JANET_NUMBER) {
       // e = collection
       // e -> rax
       emit_byte(code, 0x48);
@@ -1808,7 +2276,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_byte(code, 0xC1);
       emit_byte(code, 0xE0);
       emit_byte(code, 0x11);
-       // right 17
+      // right 17
       emit_byte(code, 0x48);
       emit_byte(code, 0xC1);
       emit_byte(code, 0xE8);
@@ -1836,7 +2304,7 @@ static void compile_bytecode(CodeBuffer *code, JittedFunction *jitted, int pc, u
       emit_byte(code, 0xC1);
       emit_byte(code, 0xE0);
       emit_byte(code, 0x11);
-       // right 17
+      // right 17
       emit_byte(code, 0x48);
       emit_byte(code, 0xC1);
       emit_byte(code, 0xE8);

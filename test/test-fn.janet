@@ -292,4 +292,96 @@
       (++ pass-count))))
 (print pass-count " edges passed")
 
+
+(def binop-struct
+{
+ :+ (fn [lhs rhs] 1)
+ :r+ (fn [lhs rhs] 2)
+ :- (fn [lhs rhs] 3)
+ :r- (fn [lhs rhs] 4)
+ :* (fn [lhs rhs] 5)
+ :r* (fn [lhs rhs] 6)
+ :/ (fn [lhs rhs] 7)
+ :r/ (fn [lhs rhs] 8)
+ :% (fn [lhs rhs] 9)
+ :r% (fn [lhs rhs] 10)
+ :mod (fn [lhs rhs] 11)
+ :rmod (fn [lhs rhs] 12)
+ :& (fn [lhs rhs] 13)
+ :r& (fn [lhs rhs] 14)
+ (keyword "|") (fn [lhs rhs] 15)
+ (keyword "r|") (fn [lhs rhs] 16)
+ (keyword "^") (fn [lhs rhs] 17)
+ (keyword "r^") (fn [lhs rhs] 18)
+ (keyword "~") (fn [lhs] 19)
+ :<< (fn [lhs rhs] 20)
+ :>> (fn [lhs rhs] 20)
+})
+
+
+(def binop-method-tests
+  [(fn [lhs rhs] (+ lhs 123))
+   (fn [lhs rhs] (+ 123 rhs))
+   (fn [lhs rhs] (+ lhs rhs))
+   (fn [lhs rhs] (+ rhs lhs))
+
+   (fn [lhs rhs] (- lhs 123))
+   (fn [lhs rhs] (- 123 rhs))
+   (fn [lhs rhs] (- lhs rhs))
+   (fn [lhs rhs] (- rhs lhs))
+
+   (fn [lhs rhs] (* lhs 123))
+   (fn [lhs rhs] (* 123 rhs))
+   (fn [lhs rhs] (* lhs rhs))
+   (fn [lhs rhs] (* rhs lhs))
+
+   (fn [lhs rhs] (/ lhs 123))
+   (fn [lhs rhs] (/ 123 rhs))
+   (fn [lhs rhs] (/ lhs rhs))
+   (fn [lhs rhs] (/ rhs lhs))
+
+   (fn [lhs rhs] (mod lhs 123))
+   (fn [lhs rhs] (mod 123 rhs))
+   (fn [lhs rhs] (mod lhs rhs))
+   (fn [lhs rhs] (mod rhs lhs))
+
+   (fn [lhs rhs] (% lhs 123))
+   (fn [lhs rhs] (% 123 rhs))
+   (fn [lhs rhs] (% lhs rhs))
+   (fn [lhs rhs] (% rhs lhs))
+
+   (fn [lhs rhs] (band lhs 123))
+   (fn [lhs rhs] (band 123 rhs))
+   (fn [lhs rhs] (band lhs rhs))
+   (fn [lhs rhs] (band rhs lhs))
+
+   (fn [lhs rhs] (bor lhs 123))
+   (fn [lhs rhs] (bor 123 rhs))
+   (fn [lhs rhs] (bor lhs rhs))
+   (fn [lhs rhs] (bor rhs lhs))
+
+   (fn [lhs rhs] (bxor lhs 123))
+   (fn [lhs rhs] (bxor 123 rhs))
+   (fn [lhs rhs] (bxor lhs rhs))
+   (fn [lhs rhs] (bxor rhs lhs))
+
+   (fn [lhs rhs] (bnot lhs))
+   (fn [lhs rhs] (bnot rhs))
+
+   (fn [lhs rhs] (bxor lhs 123))
+   (fn [lhs rhs] (bxor 123 rhs))
+   (fn [lhs rhs] (bxor lhs rhs))
+   (fn [lhs rhs] (bxor rhs lhs))
+
+   (fn [lhs rhs] (blshift lhs 2))
+   (fn [lhs rhs] (blshift rhs 2))
+  ])
+
+(var pass-count 0)
+(each t binop-method-tests
+  (if (jit-result-matches t binop-struct 123)
+    (++ pass-count)))
+(print pass-count " binop override")
+
+
 (print "success")

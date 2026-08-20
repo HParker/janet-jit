@@ -1,12 +1,12 @@
 # (jit/jitable (fn []))
 
-Small callable Janet Jit. You tell the jit what functions to compile
+Small single file callable Jit for the janet programming language. You tell the jit what functions to compile
 and it compiles them on next call. The jit makes a huge number of
-assumptions, so the jit is not theright choice in all cases.
+assumptions, so the jit is not the right choice in all cases.
 
 Right now it only target System V x86 with nanboxed janet values. I
 would love to support ARM and Janet without nanboxed, but haven't
-doneso yet.
+done so yet.
 
 ```janet
 (defn lerp
@@ -82,9 +82,7 @@ I believe the next big performance boost for larger functions will be inlining.
 
 Jit generated code has less strict garantees about correctness and errors than the interpreter. It expects that you to pass it correct numeric focused code.
 
-In Janet, `(+ "hi" 1)` raises an error. This JIT that should be treated as undefined behavior. On my machine this returns "hi", but that may change at any time.
-
-This also applies to defining your own operators. writting,
+Defining your own operators is supported, but will likely not perform better than the interpreter
 
 ```janet
 (def addable
@@ -94,7 +92,7 @@ This also applies to defining your own operators. writting,
 (+ addable 10)) # prints #<table> 10
 ```
 
-works in the interpreter, but should be considered undefined behavior in the JIT.
+works, but will end up doing nearly the same work as in the interpreter.
 
 There are also a number of operations the VM can do that the JIT today does not support. They mostly have to do with VM state and probably make bad candidates for the JIT anyways. Today the list of unsupported ops is:
 
@@ -105,7 +103,7 @@ There are also a number of operations the VM can do that the JIT today does not 
 - (prop) propagate
 - (clo) closure
 
-Operations that fall back to the interpreter, will use the JIT:
+Operations that always fall back to the interpreter:
 
 - push
 - type check
@@ -126,8 +124,12 @@ Operations that fall back to the interpreter, will use the JIT:
 
 Using these operators can slow down jitted functions, but should work as expected.
 
+All other operations can also fall back to the VM when runtime type information isn't provable. I want to add information about when these cases are compiled, but haven't added that yet.
+
 ## Other things
 
-- Calling out of the JIT uses `janet_call` which means GC will not run. This can be a benefit, or a mistake depending on the application. Calls also have a ~10% performance penalty. If you need to leave the JIT a lot, you won't have very good JIT performance.
+- Calling out of the JIT uses `janet_call` which means GC will not run. This can be a benefit, or a mistake depending on the application. Calls also have a ~10% performance penalty. If you need to leave the JIT a lot, you won't have good JIT performance.
 
 - `tailcalls` are just normal calls, so you can get stack depth issues you otherwise wouldn't get.
+
+- Bounds checks don't currently happen on binary shift type operterations which does not match the interpreter's behavior. (I want to change this)
