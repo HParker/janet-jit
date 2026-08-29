@@ -86,7 +86,8 @@
 	  (put list i rhs)
 	  (put list (+ i 1) lhs))))))
 
-(def perm-to-sort (array ;perm-table))
+(defn bubble-sort-fresh []
+  (bubble-sort (array ;perm-table)))
 
 # Copy of deep-not= from boot.janet
 (defn copy-deep-not=
@@ -153,7 +154,7 @@
 (prin "| dot  ")
 (jit-perf-cmp 10000000 dot 20.234 30.567 1.23 9.87)
 (prin "| bubble sort ")
-(jit-perf-cmp 10000 bubble-sort perm-to-sort)
+(jit-perf-cmp 10000 bubble-sort-fresh)
 (prin "| perlin gradients ")
 (jit-perf-cmp 100000 calculate-perlin-gradients)
 (prin "| in   ")
