@@ -18,13 +18,23 @@ typedef enum {
   OPERAND_UNUSED,
   OPERAND_UNDEFINED,
   OPERAND_VIRTUAL_REGISTER,
-  /* OPERAND_PHYSICAL_REGISTER, */
   OPERAND_BASIC_BLOCK,
   OPERAND_SIGNED_IMM,
   OPERAND_UNSIGNED_IMM,
   OPERAND_JANET_IMM,
   OPERAND_PHI_SOURCE,
 } OperandType;
+
+char *operand_names[] = {
+  "unused",
+  "undefined",
+  "vreg",
+  "bb",
+  "imms",
+  "immus",
+  "jimm",
+  "phi_source",
+};
 
 typedef struct {
   size_t bb;
@@ -37,7 +47,6 @@ typedef struct {
   union {
     size_t bb;
     size_t virtual_register;
-    /* size_t physical_register; */
     uint64_t immus;
     int64_t imms;
   };
@@ -54,7 +63,7 @@ typedef enum {
   HIR_DIV,
   HIR_DIV_FLOOR,
   HIR_MODULO,
-  HIR_REAMINDER,
+  HIR_REMAINDER,
   HIR_AND,
   HIR_OR,
   HIR_XOR,
@@ -96,55 +105,55 @@ typedef enum {
 } InstructionType;
 
 char *instruction_names[] = {
-  "NOOP",
-  "ERROR",
-  "TYPECHECK",
-  "RETURN",
-  "ADD",
-  "SUB",
-  "MUL",
-  "DIV",
-  "DIV_FLOOR",
-  "MODULO",
-  "REAMINDER",
-  "AND",
-  "OR",
-  "XOR",
-  "NOT",
-  "LSHIFT",
-  "RSHIFT",
-  "RUSHIFT",
-  "JUMP",
-  "JUMP_IF",
-  "JUMP_IF_NOT",
-  "JUMP_IF_NIL",
-  "JUMP_IF_NOT_NIL",
-  "GREATER_THAN",
-  "LESS_THAN",
-  "EQUALS",
-  "COMPARE",
-  "LOAD",
-  "LOAD_ARG",
-  "PUSH",
-  "CALL",
-  "TAIL_CALL",
-  "IN",
-  "GET",
-  "PUT",
-  "LENGTH",
-  "MAKE_ARRAY",
-  "MAKE_BUFFER",
-  "MAKE_STRING",
-  "MAKE_STRUCT",
-  "MAKE_TABLE",
-  "MAKE_TUPLE",
-  "MAKE_BRACKET_TUPLE",
-  "GREATER_THAN_EQUAL",
-  "LESS_THAN_EQUAL",
-  "NEXT",
-  "NOT_EQUALS",
-  "PHI",
-  "PHI_PLACEHOLDER",
+  "noop",
+  "error",
+  "typecheck",
+  "return",
+  "add",
+  "sub",
+  "mul",
+  "div",
+  "div-floor",
+  "modulo",
+  "reaminder",
+  "and",
+  "or",
+  "xor",
+  "not",
+  "lshift",
+  "rshift",
+  "rushift",
+  "jump",
+  "jump-if",
+  "jump-if-not",
+  "jump-if-nil",
+  "jump-if-not-nil",
+  "greater-than",
+  "less-than",
+  "equals",
+  "compare",
+  "load",
+  "load-arg",
+  "push",
+  "call",
+  "tail-call",
+  "in",
+  "get",
+  "put",
+  "length",
+  "make-array",
+  "make-buffer",
+  "make-string",
+  "make-struct",
+  "make-table",
+  "make-tuple",
+  "make-bracket-tuple",
+  "greater-than-equal",
+  "less-than-equal",
+  "next",
+  "not-equals",
+  "phi",
+  "phi-placeholder",
 };
 
 typedef struct {
@@ -193,6 +202,7 @@ typedef struct {
   BasicBlock *blocks;
   size_t *block_start_pcs; // leader janet pc -> block_id
   size_t *block_locations; // block_id -> location in x86 assembly
+  uint32_t *virtual_register_types;
   size_t virtual_register_count;
 } MethodBlocks;
 
@@ -213,11 +223,18 @@ typedef struct {
   Janet *argv;
 } CallArgs;
 
+typedef enum {
+  MISMATCH_ERROR,
+  MISMATCH_FALLBACK,
+  MISMATCH_RECOMPILE,
+} MismatchBehavior;
+
 typedef struct {
   size_t code_size;
   void *code;
+  MismatchBehavior mismatch_behavior;
   JanetFunction *fallback;
-  size_t signature_argc;
+  int32_t signature_argc;
   JanetType *signature_arg_types;
   MethodBlocks method_blocks;
   CallArgs ca;
@@ -229,7 +246,6 @@ void setup_method_blocks(MethodBlocks *blocks, size_t bytecode_length) {
   blocks->blocks = malloc(blocks->capacity * sizeof(BasicBlock));
   blocks->block_start_pcs = malloc(bytecode_length * sizeof(size_t));
 
-  // TODO: this size is not accurate
   blocks->block_locations = malloc(bytecode_length * sizeof(size_t));
   blocks->virtual_register_count = 0;
 }
@@ -551,7 +567,7 @@ static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t 
       break;
     }
     case JOP_REMAINDER: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_REAMINDER);
+      Instruction *instruction = add_instruction(blocks, block_id, HIR_REMAINDER);
       instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
       instruction->operand1.virtual_register = slot_map[BB];
       instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
@@ -1419,7 +1435,6 @@ void build_basic_blocks(MethodBlocks *blocks, JanetFunction *fn) {
 	      janet_panic("should be unreachable (unresolved live phi made it here)");
 	    }
 	    source->virtual_register = blocks->blocks[bb_i].slot_map[slot_i];
-	    /* } */
 	  }
 	}
 
@@ -1455,14 +1470,206 @@ void build_basic_blocks(MethodBlocks *blocks, JanetFunction *fn) {
     }
   }
 
+  // TODO: technically, this number can be lowered if `replace_virtaul_register` has run.
+  // but reducing the number would require renumbering.
+  blocks->virtual_register_types = calloc(blocks->virtual_register_count, sizeof(uint32_t));
+
+
   // lower phis
   // TODO
 }
 
-void print_ops(Operand *op) {
+static uint32_t operand_type(MethodBlocks *blocks, Operand *op) {
   switch (op->type) {
   case OPERAND_VIRTUAL_REGISTER:
-    printf("v%zu", op->virtual_register);
+    return blocks->virtual_register_types[op->virtual_register];
+  case OPERAND_SIGNED_IMM:
+  case OPERAND_UNSIGNED_IMM:
+    return JANET_TFLAG_NUMBER;
+  case OPERAND_JANET_IMM: {
+    Janet value;
+    value.u64 = op->immus;
+    return 1u << janet_type(value);
+  }
+  }
+}
+
+#define JIT_JANET_TFLAG_ANY (UINT32_MAX >> (32 - JANET_COUNT_TYPES))
+
+void add_type(MethodBlocks *blocks, uint32_t vreg, uint32_t tflag, bool *changed) {
+  uint32_t cur_type = blocks->virtual_register_types[vreg];
+  uint32_t updated_type = cur_type | tflag;
+  if (cur_type == updated_type) {
+    return;
+  }
+  (*changed) = true;
+  blocks->virtual_register_types[vreg] |= tflag;
+}
+
+void type_flow(MethodBlocks *blocks, int32_t argc, Janet *argv) {
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (size_t block_i = 0; block_i < blocks->count; block_i++) {
+      BasicBlock *block = &blocks->blocks[block_i];
+      for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
+	Instruction *instr = &block->instructions[instr_i];
+	switch (instr->type) {
+	case HIR_NOOP:
+	case HIR_ERROR:
+	case HIR_RETURN:
+	case HIR_JUMP:
+	case HIR_JUMP_IF:
+	case HIR_JUMP_IF_NOT:
+	case HIR_JUMP_IF_NIL:
+	case HIR_JUMP_IF_NOT_NIL:
+	case HIR_TAIL_CALL:
+	case HIR_PUT:
+	case HIR_PUSH:
+	  // noop
+	  break;
+	case HIR_TYPECHECK:
+	  // TODO: I can use this data, but I am ignoring it for now.
+	  break;
+	case HIR_ADD:
+	case HIR_SUB:
+	case HIR_MUL:
+	case HIR_DIV:
+	case HIR_DIV_FLOOR:
+	case HIR_MODULO:
+	case HIR_REMAINDER:
+	case HIR_AND:
+	case HIR_OR:
+	case HIR_XOR:
+	case HIR_LSHIFT:
+	case HIR_RSHIFT:
+	case HIR_RUSHIFT: {
+	  // op1 is alwasy a virtual register.
+	  uint32_t lhs = operand_type(blocks, &instr->operand1);
+	  uint32_t rhs = operand_type(blocks, &instr->operand2);
+	  if (lhs == 0 || rhs == 0) {
+	    // too early to know
+	  } else if (lhs == JANET_TFLAG_NUMBER && rhs == JANET_TFLAG_NUMBER) {
+	    add_type(blocks, instr->result.virtual_register, JANET_TFLAG_NUMBER, &changed);
+	  } else {
+	    add_type(blocks, instr->result.virtual_register, JIT_JANET_TFLAG_ANY, &changed);
+	  }
+	  break;
+	}
+	case HIR_NOT: {
+	  // op1 is alwasy a virtual register.
+	  uint32_t val = operand_type(blocks, &instr->operand1);
+	  if (val == 0) {
+	    // too early to know
+	  } else if (val == JANET_TFLAG_NUMBER) {
+	    add_type(blocks, instr->result.virtual_register, JANET_TFLAG_NUMBER, &changed);
+	  } else {
+	    add_type(blocks, instr->result.virtual_register, JIT_JANET_TFLAG_ANY, &changed);
+	  }
+	  break;
+	}
+	case HIR_COMPARE:
+	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_NUMBER, &changed);
+	  break;
+	case HIR_GREATER_THAN:
+	case HIR_LESS_THAN:
+	case HIR_EQUALS:
+	case HIR_GREATER_THAN_EQUAL:
+	case HIR_LESS_THAN_EQUAL:
+	case HIR_NOT_EQUALS:
+	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_BOOLEAN, &changed);
+	  break;
+	case HIR_LOAD:
+	  add_type(blocks, instr->result.virtual_register, operand_type(blocks, &instr->operand1), &changed);
+	  break;
+	case HIR_LOAD_ARG:
+	  add_type(blocks, instr->result.virtual_register, 1u << janet_type(argv[instr->operand1.immus]), &changed);
+	  break;
+	case HIR_CALL:
+	case HIR_IN:
+	case HIR_GET:
+	case HIR_NEXT:
+	  add_type(blocks, instr->result.virtual_register, JIT_JANET_TFLAG_ANY, &changed);
+	  break;
+	case HIR_LENGTH:
+	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_NUMBER, &changed);
+	  break;
+	case HIR_MAKE_ARRAY:
+	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_ARRAY, &changed);
+	  break;
+	case HIR_MAKE_BUFFER:
+	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_BUFFER, &changed);
+	  break;
+	case HIR_MAKE_STRING:
+	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_STRING, &changed);
+	  break;
+	case HIR_MAKE_STRUCT:
+	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_STRUCT, &changed);
+	  break;
+	case HIR_MAKE_TABLE:
+	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_TABLE, &changed);
+	  break;
+	case HIR_MAKE_TUPLE:
+	case HIR_MAKE_BRACKET_TUPLE:
+	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_TUPLE, &changed);
+	  break;
+	case HIR_PHI: {
+	  for (size_t i = 0; i < instr->phi_source_count; i++) {
+	    PhiSource *source = &instr->phi_sources[i];
+	    add_type(blocks, instr->result.virtual_register, blocks->virtual_register_types[source->virtual_register], &changed);
+	  }
+	  break;
+	}
+	case HIR_PHI_PLACEHOLDER:
+	  // TODO: assert unreachable
+	  break;
+	}
+      }
+    }
+  }
+}
+
+void print_vreg_types(MethodBlocks *blocks, size_t vreg) {
+  printf("(");
+  if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_NIL) == JANET_TFLAG_NIL) {
+    printf("nil ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_BOOLEAN) == JANET_TFLAG_BOOLEAN) {
+    printf("bool ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_FIBER) == JANET_TFLAG_FIBER) {
+    printf("fiber ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_NUMBER) == JANET_TFLAG_NUMBER) {
+    printf("number ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_STRING) == JANET_TFLAG_STRING) {
+    printf("string ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_SYMBOL) == JANET_TFLAG_SYMBOL) {
+    printf("symbol ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_KEYWORD) == JANET_TFLAG_KEYWORD) {
+    printf("keyword ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_ARRAY) == JANET_TFLAG_ARRAY) {
+    printf("array ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_TUPLE) == JANET_TFLAG_TUPLE) {
+    printf("tuple ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_TABLE) == JANET_TFLAG_TABLE) {
+    printf("table ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_STRUCT) == JANET_TFLAG_STRUCT) {
+    printf("struct ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_BUFFER) == JANET_TFLAG_BUFFER) {
+    printf("buffer ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_FUNCTION) == JANET_TFLAG_FUNCTION) {
+    printf("function ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_CFUNCTION) == JANET_TFLAG_CFUNCTION) {
+    printf("cfunction ");
+  } else if ((blocks->virtual_register_types[vreg] & JANET_TFLAG_ABSTRACT) == JANET_TFLAG_ABSTRACT) {
+    printf("abstract ");
+  }
+  printf(")");
+}
+
+void print_ops(MethodBlocks *blocks, Operand *op) {
+  switch (op->type) {
+  case OPERAND_VIRTUAL_REGISTER:
+    printf("v%zu ", op->virtual_register);
+    print_vreg_types(blocks, op->virtual_register);
     break;
   case OPERAND_BASIC_BLOCK:
     printf("bb%zu", op->bb);
@@ -1493,22 +1700,22 @@ void print_basic_blocks(MethodBlocks *blocks) {
     for (size_t instr_i = 0; instr_i < bb->count; instr_i++) {
       Instruction *instruction = &bb->instructions[instr_i];
       printf("%zu. ", instr_i);
-      print_ops(&instruction->result);
+      print_ops(blocks, &instruction->result);
 	printf(" = ");
       printf("%s [", instruction_names[instruction->type]);
       if (instruction->type == HIR_PHI) {
-	print_ops(&instruction->result);
+	print_ops(blocks, &instruction->result);
 	printf(", ");
 	for (size_t i = 0; i < instruction->phi_source_count; i++) {
 	  printf("(bb%zu: v%zu) ", instruction->phi_sources[i].bb, instruction->phi_sources[i].virtual_register);
 	}
       } else {
 
-	print_ops(&instruction->operand1);
+	print_ops(blocks, &instruction->operand1);
 	printf(", ");
-	print_ops(&instruction->operand2);
+	print_ops(blocks, &instruction->operand2);
 	printf(", ");
-	print_ops(&instruction->operand3);
+	print_ops(blocks, &instruction->operand3);
       }
       printf("]\n");
     }
@@ -1740,7 +1947,6 @@ uint64_t jit_call(Janet callee, CallArgs *call_args) {
   return result;
 }
 
-
 uint64_t jit_make_array(CallArgs *call_args) {
   Janet a = janet_wrap_array(janet_array_n(call_args->argv, call_args->count));
   call_args->count = 0;
@@ -1806,6 +2012,16 @@ uint64_t jit_make_struct(CallArgs *call_args) {
 }
 
 typedef Janet (*JitFn)(Janet *argv, CallArgs *call_args);
+
+// codegen helpers
+bool operand_numeric(uint32_t *types, Operand *op1) {
+  return types[op1->virtual_register] == JANET_TFLAG_NUMBER;
+}
+
+bool operands_numeric(uint32_t *types, Operand *op1, Operand *op2) {
+  return types[op1->virtual_register] == JANET_TFLAG_NUMBER &&
+    (op2->type == OPERAND_SIGNED_IMM || op2->type == OPERAND_UNSIGNED_IMM || types[op2->virtual_register] == JANET_TFLAG_NUMBER);
+}
 
 // codegen
 static void emit_byte(CodeBuffer *code, uint8_t byte) {
@@ -2045,7 +2261,7 @@ static void emit_gpr_op(CodeBuffer *code, uint8_t op, uint32_t lhs, uint32_t rhs
   emit_byte(code, 0x48 |
 	    ((rhs & 8) ? 0x04 : 0) |
 	    ((lhs & 8) ? 0x01 : 0));
-  emit_byte(code, op); // and
+  emit_byte(code, op);
   emit_byte(code, 0xC0 | ((rhs & 7) << 3) | (lhs & 7));
 }
 
@@ -2228,7 +2444,6 @@ static void emit_binary_fallback(CodeBuffer *code, Instruction *instr, JitBinary
   emit_store_ret(code, instr->result.virtual_register);
 }
 
-
 static void emit_unary_fallback(CodeBuffer *code, Instruction *instr, JitUnaryFallback fallback) {
   emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
   emit_cfun_call(code, fallback);
@@ -2273,100 +2488,133 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_ADD: {
-      /* emit_stack_to_xmm(code, 0, instr->operand1.virtual_register); */
-      /* emit_operand_to_xmm(code, 1, &instr->operand2); */
-      /* emit_binary_op(code, X86_ADD, instr->result.virtual_register, 0, 1); */
-      /* emit_xmm_to_stack(code, instr->result.virtual_register, 0); */
-      emit_binary_fallback(code, instr, jit_add_fallback);
+      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
+	emit_operand_to_xmm(code, 1, &instr->operand2);
+	emit_binary_op(code, X86_ADD, instr->result.virtual_register, 0, 1);
+	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_add_fallback);
+      }
       break;
     }
     case HIR_SUB: {
-      /* emit_stack_to_xmm(code, 0, instr->operand1.virtual_register); */
-      /* emit_operand_to_xmm(code, 1, &instr->operand2); */
-      /* emit_binary_op(code, X86_SUB, instr->result.virtual_register, 0, 1); */
-      /* emit_xmm_to_stack(code, instr->result.virtual_register, 0); */
-      emit_binary_fallback(code, instr, jit_sub_fallback);
+      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
+	emit_operand_to_xmm(code, 1, &instr->operand2);
+	emit_binary_op(code, X86_SUB, instr->result.virtual_register, 0, 1);
+	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_sub_fallback);
+      }
       break;
     }
     case HIR_MUL: {
-      /* emit_stack_to_xmm(code, 0, instr->operand1.virtual_register); */
-      /* emit_operand_to_xmm(code, 1, &instr->operand2); */
-      /* emit_binary_op(code, X86_MUL, instr->result.virtual_register, 0, 1); */
-      /* emit_xmm_to_stack(code, instr->result.virtual_register, 0); */
-      emit_binary_fallback(code, instr, jit_mul_fallback);
+      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
+	emit_operand_to_xmm(code, 1, &instr->operand2);
+	emit_binary_op(code, X86_MUL, instr->result.virtual_register, 0, 1);
+	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_mul_fallback);
+      }
       break;
     }
     case HIR_DIV: {
-      /* emit_stack_to_xmm(code, 0, instr->operand1.virtual_register); */
-      /* emit_operand_to_xmm(code, 1, &instr->operand2); */
-      /* emit_binary_op(code, X86_DIV, instr->result.virtual_register, 0, 1); */
-      /* emit_xmm_to_stack(code, instr->result.virtual_register, 0); */
-      emit_binary_fallback(code, instr, jit_div_fallback);
+      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
+	emit_operand_to_xmm(code, 1, &instr->operand2);
+	emit_binary_op(code, X86_DIV, instr->result.virtual_register, 0, 1);
+	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_div_fallback);
+      }
       break;
     }
     case HIR_DIV_FLOOR: {
-      /* emit_stack_to_xmm(code, 0, instr->operand1.virtual_register); */
-      /* emit_stack_to_xmm(code, 1, instr->operand2.virtual_register); */
-      /* emit_binary_op(code, X86_DIV, instr->result.virtual_register, 0, 1); */
-      /* emit_floor(code, 0); */
-      /* emit_xmm_to_stack(code, instr->result.virtual_register, 0); */
-      emit_binary_fallback(code, instr, jit_divf_fallback);
+      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
+	emit_stack_to_xmm(code, 1, instr->operand2.virtual_register);
+	emit_binary_op(code, X86_DIV, instr->result.virtual_register, 0, 1);
+	emit_floor(code, 0);
+	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_divf_fallback);
+      }
       break;
     }
     case HIR_MODULO: {
-      /* emit_stack_to_xmm(code, 0, instr->operand1.virtual_register); */
-      /* emit_stack_to_xmm(code, 1, instr->operand1.virtual_register); */
-      /* emit_stack_to_xmm(code, 2, instr->operand2.virtual_register); */
-      /* emit_binary_op(code, X86_DIV, instr->result.virtual_register, 1, 2); */
-      /* emit_floor(code, 1); */
-      /* emit_binary_op(code, X86_MUL, instr->result.virtual_register, 1, 2); */
-      /* emit_binary_op(code, X86_SUB, instr->result.virtual_register, 0, 1); */
-      /* emit_xmm_to_stack(code, instr->result.virtual_register, 0); */
-      emit_binary_fallback(code, instr, jit_mod_fallback);
+      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
+	emit_stack_to_xmm(code, 1, instr->operand1.virtual_register);
+	emit_stack_to_xmm(code, 2, instr->operand2.virtual_register);
+	emit_binary_op(code, X86_DIV, instr->result.virtual_register, 1, 2);
+	emit_floor(code, 1);
+	emit_binary_op(code, X86_MUL, instr->result.virtual_register, 1, 2);
+	emit_binary_op(code, X86_SUB, instr->result.virtual_register, 0, 1);
+	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_mod_fallback);
+      }
       break;
     }
-    case HIR_REAMINDER: {
-      /* emit_stack_to_xmm(code, 0, instr->operand1.virtual_register); */
-      /* emit_stack_to_xmm(code, 1, instr->operand1.virtual_register); */
-      /* emit_stack_to_xmm(code, 2, instr->operand2.virtual_register); */
-      /* emit_binary_op(code, X86_DIV, instr->result.virtual_register, 1, 2); */
-      /* emit_trunc(code, 1); */
-      /* emit_binary_op(code, X86_MUL, instr->result.virtual_register, 1, 2); */
-      /* emit_binary_op(code, X86_SUB, instr->result.virtual_register, 0, 1); */
-      /* emit_xmm_to_stack(code, instr->result.virtual_register, 0); */
-      emit_binary_fallback(code, instr, jit_rem_fallback);
+    case HIR_REMAINDER: {
+      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
+	emit_stack_to_xmm(code, 1, instr->operand1.virtual_register);
+	emit_stack_to_xmm(code, 2, instr->operand2.virtual_register);
+	emit_binary_op(code, X86_DIV, instr->result.virtual_register, 1, 2);
+	emit_trunc(code, 1);
+	emit_binary_op(code, X86_MUL, instr->result.virtual_register, 1, 2);
+	emit_binary_op(code, X86_SUB, instr->result.virtual_register, 0, 1);
+	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_rem_fallback);
+      }
       break;
     }
     case HIR_AND: {
-      // Should do I do range checks here, or just say, "The jit rolls over"
-      /* emit_stack_to_gpr(code, 0, instr->operand1.virtual_register); */
-      /* emit_stack_to_gpr(code, 1, instr->operand2.virtual_register); */
-      /* emit_gpr_op(code, X86_AND_GPR, 0, 1); */
-      /* emit_gpr_to_stack(code, instr->result.virtual_register, 0); */
-      emit_binary_fallback(code, instr, jit_band_fallback);
+      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+	// Should do I do range checks here, or just say, "The jit rolls over"
+	emit_stack_to_gpr(code, 0, instr->operand1.virtual_register);
+	emit_stack_to_gpr(code, 1, instr->operand2.virtual_register);
+	emit_gpr_op(code, X86_AND_GPR, 0, 1);
+	emit_gpr_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_band_fallback);
+      }
       break;
     }
     case HIR_OR: {
-      /* emit_stack_to_gpr(code, 0, instr->operand1.virtual_register); */
-      /* emit_stack_to_gpr(code, 1, instr->operand2.virtual_register); */
-      /* emit_gpr_op(code, X86_OR_GPR, 0, 1); */
-      /* emit_gpr_to_stack(code, instr->result.virtual_register, 0); */
-      emit_binary_fallback(code, instr, jit_bor_fallback);
+      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+	emit_stack_to_gpr(code, 0, instr->operand1.virtual_register);
+	emit_stack_to_gpr(code, 1, instr->operand2.virtual_register);
+	emit_gpr_op(code, X86_OR_GPR, 0, 1);
+	emit_gpr_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_bor_fallback);
+      }
       break;
     }
     case HIR_XOR: {
-      /* emit_stack_to_gpr(code, 0, instr->operand1.virtual_register); */
-      /* emit_stack_to_gpr(code, 1, instr->operand2.virtual_register); */
-      /* emit_gpr_op(code, X86_XOR_GPR, 0, 1); */
-      /* emit_gpr_to_stack(code, instr->result.virtual_register, 0); */
-      emit_binary_fallback(code, instr, jit_bxor_fallback);
+      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+	emit_stack_to_gpr(code, 0, instr->operand1.virtual_register);
+	emit_stack_to_gpr(code, 1, instr->operand2.virtual_register);
+	emit_gpr_op(code, X86_XOR_GPR, 0, 1);
+	emit_gpr_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_bxor_fallback);
+      }
       break;
     }
     case HIR_NOT: {
-      /* emit_stack_to_gpr(code, 0, instr->operand1.virtual_register); */
-      /* emit_not(code, 0); */
-      /* emit_gpr_to_stack(code, instr->result.virtual_register, 0); */
-      emit_unary_fallback(code, instr, jit_bnot_fallback);
+      if (operand_numeric(blocks->virtual_register_types, &instr->operand1)) {
+	emit_stack_to_gpr(code, 0, instr->operand1.virtual_register);
+	emit_not(code, 0);
+	emit_gpr_to_stack(code, instr->result.virtual_register, 0);
+      } else {
+	emit_unary_fallback(code, instr, jit_bnot_fallback);
+      }
       break;
     }
     case HIR_LSHIFT: {
@@ -2831,56 +3079,160 @@ static int jitted_function_gcmark(void *p, size_t size) {
   return 0;
 }
 
+static Janet handle_mismatch(JittedFunction *jitted, int32_t argc, Janet *argv) {
+  switch (jitted->mismatch_behavior) {
+  case MISMATCH_FALLBACK:
+    return janet_call(jitted->fallback, argc, argv);
+  case MISMATCH_ERROR:
+    janet_panic("mismatching signature!");
+    break;
+  case MISMATCH_RECOMPILE:
+    janet_panic("recompile not yet supported!");
+  }
+}
+
+static Janet jitted_op_tuple(Operand *op) {
+  Janet *janet_op = janet_tuple_begin(2);
+  janet_op[0] = janet_ckeywordv(operand_names[op->type]);
+  switch (op->type) {
+  case OPERAND_VIRTUAL_REGISTER:
+    janet_op[1] = janet_wrap_number(op->virtual_register);
+    break;
+  case OPERAND_BASIC_BLOCK:
+    janet_op[1] = janet_wrap_number(op->bb);
+    break;
+  case OPERAND_SIGNED_IMM:
+    janet_op[1] = janet_wrap_number(op->imms);
+    break;
+  case OPERAND_UNSIGNED_IMM:
+    janet_op[1] = janet_wrap_number(op->immus);
+    break;
+  case OPERAND_JANET_IMM:
+    janet_op[1] = janet_ckeywordv("TODO");
+    break;
+  case OPERAND_UNUSED:
+    janet_op[1] = janet_ckeywordv("_");
+    break;
+  case OPERAND_UNDEFINED:
+    janet_op[1] = janet_ckeywordv("?");
+    break;
+  }
+  return janet_wrap_tuple(janet_tuple_end(janet_op));
+}
+
+static Janet jitted_janet_hir(JittedFunction *jitted) {
+  MethodBlocks *blocks = &jitted->method_blocks;
+  Janet *janet_bbs = janet_tuple_begin(blocks->count);
+  for (size_t block_i = 0; block_i < blocks->count; block_i++) {
+    BasicBlock *block = &blocks->blocks[block_i];
+    Janet *janet_bb_instrs = janet_tuple_begin(block->count);
+    for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
+      Instruction *instr = &block->instructions[instr_i];
+      if (instr->type == HIR_PHI) {
+	JanetTable *janet_instr = janet_table(1 + instr->phi_source_count);
+	janet_table_put(janet_instr,  janet_ckeywordv("type"), janet_csymbolv(instruction_names[instr->type]));
+	for (size_t i = 0; i < instr->phi_source_count; i++) {
+	  PhiSource *source = &instr->phi_sources[i];
+	  janet_table_put(janet_instr,  janet_wrap_number(source->bb), janet_wrap_number(source->virtual_register));
+	}
+	janet_bb_instrs[instr_i] = janet_wrap_struct(janet_table_to_struct(janet_instr));
+      } else {
+	JanetTable *janet_instr = janet_table(5);
+	janet_table_put(janet_instr,  janet_ckeywordv("type"), janet_ckeywordv(instruction_names[instr->type]));
+	janet_table_put(janet_instr,  janet_ckeywordv("result"), jitted_op_tuple(&instr->result));
+	janet_table_put(janet_instr,  janet_ckeywordv("op1"), jitted_op_tuple(&instr->operand1));
+	janet_table_put(janet_instr,  janet_ckeywordv("op2"), jitted_op_tuple(&instr->operand2));
+	janet_table_put(janet_instr,  janet_ckeywordv("op3"), jitted_op_tuple(&instr->operand3));
+	janet_bb_instrs[instr_i] = janet_wrap_struct(janet_table_to_struct(janet_instr));
+      }
+    }
+    janet_bbs[block_i] = janet_wrap_tuple(janet_tuple_end(janet_bb_instrs));
+  }
+  return janet_wrap_tuple(janet_tuple_end(janet_bbs));
+}
+
+static int jitted_function_get(void *p, Janet key, Janet *out) {
+  JittedFunction *jitted = p;
+  if (janet_keyeq(key, "hir")) {
+    *out = jitted_janet_hir(jitted);
+    return 1;
+  } else {
+    janet_panic("unknown key for get");
+  }
+}
+
 static Janet jitted_function_call(void *p, int32_t argc, Janet *argv) {
   JittedFunction *jitted = p;
 
-  /* for (int i = 0; i < argc; i++) { */
-  /*   if (!janet_checktype(argv[0], JANET_NUMBER)) { */
-  /*     janet_panicf("all args must be numbers (for now)"); */
-  /*   } */
-  /* } */
-
   if (jitted->code == NULL) {
+    // record signature
+    jitted->signature_argc = argc;
+    jitted->signature_arg_types = malloc(argc * sizeof(JanetType));
+    for (int i = 0; i < argc; i++) {
+      jitted->signature_arg_types[i] = janet_type(argv[i]);
+    }
+    type_flow(&jitted->method_blocks, argc, argv);
+    /* print_basic_blocks(&jitted->method_blocks); */
     compile(jitted);
+    Janet res = ((JitFn)jitted->code)(argv, &jitted->ca);
+    return res;
   }
-
-  Janet res = ((JitFn)jitted->code)(argv, &jitted->ca);
-
-  return res;
+  if (argc == jitted->signature_argc) {
+    for (int i = 0; i < argc; i++) {
+      if (janet_type(argv[i]) != jitted->signature_arg_types[i]) {
+	return handle_mismatch(jitted, argc, argv);
+	janet_panic("mismatching signature!");
+      }
+    }
+    Janet res = ((JitFn)jitted->code)(argv, &jitted->ca);
+    return res;
+  } else {
+    janet_panic("mismatching signature!");
+  }
 }
 
 static const JanetAbstractType jitted_function_type = {
   "jittable-function",
-  jitted_function_gc,
-  jitted_function_gcmark,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  jitted_function_call,
-  NULL,
-  NULL,
-  NULL
+  jitted_function_gc, // gc
+  jitted_function_gcmark, // mark
+  jitted_function_get, // get
+  NULL, // put
+  NULL, // marshal
+  NULL, // unmarshal
+  NULL, // tostring
+  NULL, // compare
+  NULL, // hash
+  NULL, // next
+  jitted_function_call, // call
+  NULL, // length
+  NULL, // bytes
+  NULL  // gcperfthread
 };
 
 static Janet jit_jitable(int32_t argc, Janet *argv) {
-  janet_fixarity(argc, 1);
+  janet_arity(argc, 1, 2);
   JanetFunction *fn = janet_getfunction(argv, 0);
   if (fn->def->min_arity != fn->def->max_arity) {
     janet_panic("only fixed arity functions are supported");
   }
+  char *mismatch_action = (char*)janet_optkeyword(argv, argc, 1, "fallback");
 
   JittedFunction *jitted =
     janet_abstract(&jitted_function_type, sizeof(JittedFunction));
 
+  if (strcmp(mismatch_action, "fallback") == 0) {
+    jitted->mismatch_behavior = MISMATCH_FALLBACK;
+  } else if (strcmp(mismatch_action, "error") == 0) {
+    jitted->mismatch_behavior = MISMATCH_FALLBACK;
+  } else if (strcmp(mismatch_action, "recompile") == 0) {
+    jitted->mismatch_behavior = MISMATCH_RECOMPILE;
+  }
+
+
   jitted->ca = (CallArgs) {
     .count = 0,
     .capacity = 0,
-    argv = NULL
+    .argv = NULL
   };
 
   jitted->code_size = 0;
@@ -2890,7 +3242,6 @@ static Janet jit_jitable(int32_t argc, Janet *argv) {
   jitted->signature_arg_types = NULL;
   setup_method_blocks(&jitted->method_blocks, fn->def->bytecode_length);
   build_basic_blocks(&jitted->method_blocks, fn);
-  /* print_basic_blocks(&jitted->method_blocks); */
 
   return janet_wrap_abstract(jitted);
 }
@@ -2906,7 +3257,7 @@ static Janet jit_compiled(int32_t argc, Janet *argv) {
 }
 
 static const JanetReg cfuns[] = {
-  {"jitable", jit_jitable, "(jit/jitable function)\n\nReturns a Jittable version of a function. Jit compilation happens on first call."},
+  {"jitable", jit_jitable, "(jit/jitable function &opt fallback-behavior)\n\nReturns a Jittable version of a function. Jit compilation happens on first call.\nYou can also specify a fallback behavior. the options are :fallback, :error and :recompile\n:fallback will call Janet when the signature does not match.\n:error will panic when the signature does not match. This is useful in dev and test environments to make sure you are getting benefit from your jitted methods.\n:recompile will compile again for the new argument types (This option is planned but not supported yet."},
   {"compiled?", jit_compiled, "(jit/compiled? function)\n\nReturns if the function successfully compiled."},
   {NULL, NULL, NULL}
 };
