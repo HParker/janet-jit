@@ -3438,9 +3438,11 @@ static Janet jitted_janet_hir(JittedFunction *jitted) {
 	JanetTable *janet_instr = janet_table(5 + instr->phi_source_count);
 	janet_table_put(janet_instr, janet_ckeywordv("type"), janet_ckeywordv(instruction_names[instr->type]));
 	janet_table_put(janet_instr, janet_ckeywordv("result"), jitted_op_tuple(&blocks->vregs[instr->result]));
-	janet_table_put(janet_instr, janet_ckeywordv("op1"), jitted_op_tuple(&blocks->vregs[0]));
-	janet_table_put(janet_instr, janet_ckeywordv("op2"), jitted_op_tuple(&blocks->vregs[0]));
-	janet_table_put(janet_instr, janet_ckeywordv("op3"), jitted_op_tuple(&blocks->vregs[0]));
+
+	Janet *janet_args = janet_tuple_begin(3);
+	janet_args[0] = janet_ckeywordv("TODO");
+
+	janet_table_put(janet_instr, janet_ckeywordv("args"), janet_wrap_tuple(janet_tuple_end(janet_args)));
 	for (size_t i = 0; i < instr->phi_source_count; i++) {
 	  PhiSource *source = &instr->phi_sources[i];
 	  janet_table_put(janet_instr, janet_wrap_number(source->bb), jitted_op_tuple(&blocks->vregs[source->virtual_register]));
@@ -3450,9 +3452,13 @@ static Janet jitted_janet_hir(JittedFunction *jitted) {
 	JanetTable *janet_instr = janet_table(5);
 	janet_table_put(janet_instr, janet_ckeywordv("type"), janet_ckeywordv(instruction_names[instr->type]));
 	janet_table_put(janet_instr, janet_ckeywordv("result"), jitted_op_tuple(&blocks->vregs[instr->result]));
-	janet_table_put(janet_instr, janet_ckeywordv("op1"), jitted_op_tuple(instruction_arg(blocks, instr, 0)));
-	janet_table_put(janet_instr, janet_ckeywordv("op2"), jitted_op_tuple(instruction_arg(blocks, instr, 1)));
-	janet_table_put(janet_instr, janet_ckeywordv("op3"), jitted_op_tuple(instruction_arg(blocks, instr, 2)));
+
+	Janet *janet_args = janet_tuple_begin(3);
+	janet_args[0] = jitted_op_tuple(instruction_arg(blocks, instr, 0));
+	janet_args[1] = jitted_op_tuple(instruction_arg(blocks, instr, 1));
+	janet_args[2] = jitted_op_tuple(instruction_arg(blocks, instr, 2));
+
+	janet_table_put(janet_instr, janet_ckeywordv("args"), janet_wrap_tuple(janet_tuple_end(janet_args)));
 	janet_bb_instrs[instr_i] = janet_wrap_struct(janet_table_to_struct(janet_instr));
       }
     }
@@ -3537,7 +3543,6 @@ static Janet jit_jitable(int32_t argc, Janet *argv) {
   } else if (strcmp(mismatch_action, "recompile") == 0) {
     jitted->mismatch_behavior = MISMATCH_RECOMPILE;
   }
-
 
   jitted->ca = (CallArgs) {
     .count = 0,
