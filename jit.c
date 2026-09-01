@@ -50,6 +50,7 @@ typedef struct {
     uint64_t immus;
     int64_t imms;
   };
+  size_t physical_register;
 } Operand;
 
 typedef enum {
@@ -57,10 +58,15 @@ typedef enum {
   HIR_ERROR,
   HIR_TYPECHECK,
   HIR_RETURN,
+  HIR_RETURN_NIL,
   HIR_ADD,
+  HIR_ADD_IMM,
   HIR_SUB,
+  HIR_SUB_IMM,
   HIR_MUL,
+  HIR_MUL_IMM,
   HIR_DIV,
+  HIR_DIV_IMM,
   HIR_DIV_FLOOR,
   HIR_MODULO,
   HIR_REMAINDER,
@@ -69,25 +75,35 @@ typedef enum {
   HIR_XOR,
   HIR_NOT,
   HIR_LSHIFT,
+  HIR_LSHIFT_IMM,
   HIR_RSHIFT,
+  HIR_RSHIFT_IMM,
   HIR_RUSHIFT,
+  HIR_RUSHIFT_IMM,
   HIR_JUMP,
   HIR_JUMP_IF,
   HIR_JUMP_IF_NOT,
   HIR_JUMP_IF_NIL,
   HIR_JUMP_IF_NOT_NIL,
   HIR_GREATER_THAN,
+  HIR_GREATER_THAN_IMM,
   HIR_LESS_THAN,
+  HIR_LESS_THAN_IMM,
   HIR_EQUALS,
+  HIR_EQUALS_IMM,
   HIR_COMPARE,
   HIR_LOAD,
   HIR_LOAD_ARG,
   HIR_PUSH,
+  HIR_PUSH2,
+  HIR_PUSH3,
   HIR_CALL,
   HIR_TAIL_CALL,
   HIR_IN,
   HIR_GET,
+  HIR_GET_INDEX,
   HIR_PUT,
+  HIR_PUT_INDEX,
   HIR_LENGTH,
   HIR_MAKE_ARRAY,
   HIR_MAKE_BUFFER,
@@ -100,69 +116,163 @@ typedef enum {
   HIR_LESS_THAN_EQUAL,
   HIR_NEXT,
   HIR_NOT_EQUALS,
+  HIR_NOT_EQUALS_IMM,
   HIR_PHI,
   HIR_PHI_PLACEHOLDER,
 } InstructionType;
 
 char *instruction_names[] = {
-  "noop",
-  "error",
-  "typecheck",
-  "return",
-  "add",
-  "sub",
-  "mul",
-  "div",
-  "div-floor",
-  "modulo",
-  "reaminder",
-  "and",
-  "or",
-  "xor",
-  "not",
-  "lshift",
-  "rshift",
-  "rushift",
-  "jump",
-  "jump-if",
-  "jump-if-not",
-  "jump-if-nil",
-  "jump-if-not-nil",
-  "greater-than",
-  "less-than",
-  "equals",
-  "compare",
-  "load",
-  "load-arg",
-  "push",
-  "call",
-  "tail-call",
-  "in",
-  "get",
-  "put",
-  "length",
-  "make-array",
-  "make-buffer",
-  "make-string",
-  "make-struct",
-  "make-table",
-  "make-tuple",
-  "make-bracket-tuple",
-  "greater-than-equal",
-  "less-than-equal",
-  "next",
-  "not-equals",
-  "phi",
-  "phi-placeholder",
+  [HIR_NOOP] = "noop",
+  [HIR_ERROR] = "err",
+  [HIR_TYPECHECK] = "typecheck",
+  [HIR_RETURN] = "ret",
+  [HIR_RETURN_NIL] = "ret-nil",
+  [HIR_ADD] = "add",
+  [HIR_ADD_IMM] = "addi",
+  [HIR_SUB] = "sub",
+  [HIR_SUB_IMM] = "subi",
+  [HIR_MUL] = "mul",
+  [HIR_MUL_IMM] = "muli",
+  [HIR_DIV] = "div",
+  [HIR_DIV_IMM] = "divi",
+  [HIR_DIV_FLOOR] = "divf",
+  [HIR_MODULO] = "mod",
+  [HIR_REMAINDER] = "rem",
+  [HIR_AND] = "and",
+  [HIR_OR] = "or",
+  [HIR_XOR] = "xor",
+  [HIR_NOT] = "not",
+  [HIR_LSHIFT] = "lshift",
+  [HIR_LSHIFT_IMM] = "lshifti",
+  [HIR_RSHIFT] = "rshift",
+  [HIR_RSHIFT_IMM] = "rshifti",
+  [HIR_RUSHIFT] = "rushift",
+  [HIR_RUSHIFT_IMM] = "rushifti",
+  [HIR_JUMP] = "jump",
+  [HIR_JUMP_IF] = "jump-if",
+  [HIR_JUMP_IF_NOT] = "jump-if-not",
+  [HIR_JUMP_IF_NIL] = "jump-if-nil",
+  [HIR_JUMP_IF_NOT_NIL] = "jump-if-not-nil",
+  [HIR_GREATER_THAN] = "gt",
+  [HIR_GREATER_THAN_IMM] = "gti",
+  [HIR_LESS_THAN] = "lt",
+  [HIR_LESS_THAN_IMM] = "lti",
+  [HIR_EQUALS] = "eq",
+  [HIR_EQUALS_IMM] = "eqi",
+  [HIR_COMPARE] = "comp",
+  [HIR_LOAD] = "load",
+  [HIR_LOAD_ARG] = "load-arg",
+  [HIR_PUSH] = "push",
+  [HIR_PUSH2] = "push2",
+  [HIR_PUSH3] = "push3",
+  [HIR_CALL] = "call",
+  [HIR_TAIL_CALL] = "tcall",
+  [HIR_IN] = "in",
+  [HIR_GET] = "get",
+  [HIR_GET_INDEX] = "geti",
+  [HIR_PUT] = "put",
+  [HIR_PUT_INDEX] = "puti",
+  [HIR_LENGTH] = "length",
+  [HIR_MAKE_ARRAY] = "make-array",
+  [HIR_MAKE_BUFFER] = "make-buffer",
+  [HIR_MAKE_STRING] = "make-string",
+  [HIR_MAKE_STRUCT] = "make-struct",
+  [HIR_MAKE_TABLE] = "make-table",
+  [HIR_MAKE_TUPLE] = "make-tuple",
+  [HIR_MAKE_BRACKET_TUPLE] = "make-bracket-tuple",
+  [HIR_GREATER_THAN_EQUAL] = "gte",
+  [HIR_LESS_THAN_EQUAL] = "lte",
+  [HIR_NEXT] = "next",
+  [HIR_NOT_EQUALS] = "not-eq",
+  [HIR_NOT_EQUALS_IMM] = "not-eqi",
+  [HIR_PHI] = "phi",
+  [HIR_PHI_PLACEHOLDER] = "impossible",
+};
+
+size_t jop_to_hir[] = {
+  [JOP_NOOP] = HIR_NOOP,
+  [JOP_ERROR] = HIR_ERROR,
+  [JOP_TYPECHECK] = HIR_TYPECHECK,
+  [JOP_RETURN] = HIR_RETURN,
+  [JOP_RETURN_NIL] = HIR_RETURN,
+  [JOP_ADD_IMMEDIATE] = HIR_ADD_IMM,
+  [JOP_ADD] = HIR_ADD,
+  [JOP_SUBTRACT_IMMEDIATE] = HIR_SUB_IMM,
+  [JOP_SUBTRACT] = HIR_SUB,
+  [JOP_MULTIPLY_IMMEDIATE] = HIR_MUL_IMM,
+  [JOP_MULTIPLY] = HIR_MUL,
+  [JOP_DIVIDE_IMMEDIATE] = HIR_DIV_IMM,
+  [JOP_DIVIDE] = HIR_DIV,
+  [JOP_DIVIDE_FLOOR] = HIR_DIV_FLOOR,
+  [JOP_MODULO] = HIR_MODULO,
+  [JOP_REMAINDER] = HIR_REMAINDER,
+  [JOP_BAND] = HIR_AND,
+  [JOP_BOR] = HIR_OR,
+  [JOP_BXOR] = HIR_XOR,
+  [JOP_BNOT] = HIR_NOT,
+  [JOP_SHIFT_LEFT] = HIR_LSHIFT,
+  [JOP_SHIFT_LEFT_IMMEDIATE] = HIR_LSHIFT_IMM,
+  [JOP_SHIFT_RIGHT] = HIR_RSHIFT,
+  [JOP_SHIFT_RIGHT_IMMEDIATE] = HIR_RSHIFT_IMM,
+  [JOP_SHIFT_RIGHT_UNSIGNED] = HIR_RUSHIFT,
+  [JOP_SHIFT_RIGHT_UNSIGNED_IMMEDIATE] = HIR_RUSHIFT_IMM,
+  /* [JOP_MOVE_FAR] = HIR_MOVE, */
+  /* [JOP_MOVE_NEAR] = HIR_MOVE, */
+  [JOP_JUMP] = HIR_JUMP,
+  [JOP_JUMP_IF] = HIR_JUMP,
+  [JOP_JUMP_IF_NOT] = HIR_JUMP,
+  [JOP_JUMP_IF_NIL] = HIR_JUMP,
+  [JOP_JUMP_IF_NOT_NIL] = HIR_JUMP,
+  [JOP_GREATER_THAN] = HIR_GREATER_THAN,
+  [JOP_GREATER_THAN_IMMEDIATE] = HIR_GREATER_THAN_IMM,
+  [JOP_LESS_THAN] = HIR_LESS_THAN,
+  [JOP_LESS_THAN_IMMEDIATE] = HIR_LESS_THAN_IMM,
+  [JOP_EQUALS] = HIR_EQUALS,
+  [JOP_EQUALS_IMMEDIATE] = HIR_EQUALS,
+  [JOP_COMPARE] = HIR_COMPARE,
+  [JOP_LOAD_NIL] = HIR_LOAD,
+  [JOP_LOAD_TRUE] = HIR_LOAD,
+  [JOP_LOAD_FALSE] = HIR_LOAD,
+  [JOP_LOAD_INTEGER] = HIR_LOAD,
+  [JOP_LOAD_CONSTANT] = HIR_LOAD,
+  [JOP_LOAD_UPVALUE] = HIR_LOAD,
+  [JOP_LOAD_SELF] = HIR_LOAD,
+  /* [JOP_SET_UPVALUE] = HIR_SET_UPVALUE, */
+  /* [JOP_CLOSURE] = HIR_CLOSURE, */
+  [JOP_PUSH] = HIR_PUSH,
+  [JOP_PUSH_2] = HIR_PUSH,
+  [JOP_PUSH_3] = HIR_PUSH,
+  [JOP_PUSH_ARRAY] = HIR_PUSH,
+  [JOP_CALL] = HIR_CALL,
+  [JOP_TAILCALL] = HIR_TAIL_CALL,
+  /* [JOP_RESUME] = HIR_RESUME, */
+  /* [JOP_SIGNAL] = HIR_SIGNAL, */
+  /* [JOP_PROPAGATE] = HIR_PROPAGATE, */
+  [JOP_IN] = HIR_IN,
+  [JOP_GET] = HIR_GET,
+  [JOP_PUT] = HIR_PUT,
+  [JOP_GET_INDEX] = HIR_GET,
+  [JOP_PUT_INDEX] = HIR_PUT,
+  [JOP_LENGTH] = HIR_LENGTH,
+  [JOP_MAKE_ARRAY] = HIR_MAKE_ARRAY,
+  [JOP_MAKE_BUFFER] = HIR_MAKE_BUFFER,
+  [JOP_MAKE_STRING] = HIR_MAKE_STRING,
+  [JOP_MAKE_STRUCT] = HIR_MAKE_STRUCT,
+  [JOP_MAKE_TABLE] = HIR_MAKE_TABLE,
+  [JOP_MAKE_TUPLE] = HIR_MAKE_TUPLE,
+  [JOP_MAKE_BRACKET_TUPLE] = HIR_MAKE_BRACKET_TUPLE,
+  [JOP_GREATER_THAN_EQUAL] = HIR_GREATER_THAN_EQUAL,
+  [JOP_LESS_THAN_EQUAL] = HIR_LESS_THAN_EQUAL,
+  [JOP_NEXT] = HIR_NEXT,
+  [JOP_NOT_EQUALS] = HIR_NOT_EQUALS,
+  [JOP_NOT_EQUALS_IMMEDIATE] = HIR_NOT_EQUALS_IMM,
+  /* [JOP_CANCEL] = HIR_CANCEL, */
 };
 
 typedef struct {
   InstructionType type;
-  Operand result;
-  /* Operand branch_condition; */
-  Operand operand1;
-  Operand operand2;
-  Operand operand3;
+  size_t result;
+  size_t args[3];
 
   size_t phi_placeholder_slot;
   size_t phi_source_count;
@@ -182,10 +292,18 @@ struct BasicBlock {
   size_t count;
   size_t capacity;
   Instruction *instructions;
+
+  // TODO: ADAM start here
+  uint32_t *virtual_register_def;
+  uint32_t *virtual_register_last_use;
+
+  // TODO: this is only valid while reading the block so no reason to keep around
   uint32_t *slot_map;
+
   size_t input_edge_count;
   size_t input_edge_capacity;
   Edge *input_edges;
+
   size_t output_edge_count;
   size_t output_edge_capacity;
   Edge *output_edges;
@@ -202,8 +320,21 @@ typedef struct {
   BasicBlock *blocks;
   size_t *block_start_pcs; // leader janet pc -> block_id
   size_t *block_locations; // block_id -> location in x86 assembly
+
+  size_t vreg_count;
+  size_t vreg_capacity;
+  Operand *vregs;
+
+  size_t imm_count;
+  size_t imm_capacity;
+  Operand *imms;
+
+  size_t bb_count;
+  size_t bb_capacity;
+  Operand *bbs;
+
+  // TODO: move the type info onto the operand itself
   uint32_t *virtual_register_types;
-  size_t virtual_register_count;
 } MethodBlocks;
 
 typedef struct {
@@ -212,8 +343,9 @@ typedef struct {
   uint8_t *data;
 
   size_t jump_index;
-  int *jump_targets;
-  int *jump_locations;
+  size_t jump_capacity;
+  size_t *jump_targets;
+  size_t *jump_locations;
 } CodeBuffer;
 
 
@@ -247,7 +379,20 @@ void setup_method_blocks(MethodBlocks *blocks, size_t bytecode_length) {
   blocks->block_start_pcs = malloc(bytecode_length * sizeof(size_t));
 
   blocks->block_locations = malloc(bytecode_length * sizeof(size_t));
-  blocks->virtual_register_count = 0;
+
+  blocks->vreg_count = 1;
+  blocks->vreg_capacity = 64;
+  blocks->vregs = calloc(blocks->vreg_capacity, sizeof(Operand));
+  // 0 is placeholder unused operand
+  blocks->vregs[0].type = OPERAND_UNUSED;
+
+  blocks->imm_count = 0;
+  blocks->imm_capacity = 64;
+  blocks->imms = calloc(blocks->imm_capacity, sizeof(Operand));
+
+  blocks->bb_count = 0;
+  blocks->bb_capacity = 64;
+  blocks->bbs = calloc(blocks->bb_capacity, sizeof(Operand));
 }
 
 #define CUR_BLOCK blocks->blocks[block_id]
@@ -267,12 +412,12 @@ Instruction *add_instruction(MethodBlocks *blocks, size_t block_id, InstructionT
 
   Instruction *instruction = &CUR_BLOCK.instructions[CUR_BLOCK.count];
 
-  instruction->type = type;
-  instruction->result.type = OPERAND_UNUSED;
-  instruction->operand1.type = OPERAND_UNUSED;
-  instruction->operand2.type = OPERAND_UNUSED;
-  instruction->operand3.type = OPERAND_UNUSED;
+  instruction->result = 0;
+  instruction->args[0] = 0;
+  instruction->args[1] = 0;
+  instruction->args[2] = 0;
 
+  instruction->type = type;
   instruction->phi_source_count = 0;
   instruction->phi_source_capacity = 0;
   instruction->phi_sources = NULL;
@@ -329,28 +474,27 @@ size_t new_basic_block(MethodBlocks *blocks, size_t slotcount, size_t start_pc) 
   size_t block_id = blocks->count;
   blocks->count++;
 
-  blocks->blocks[block_id].complete = false;
-  blocks->blocks[block_id].start_pc = start_pc;
-  blocks->blocks[block_id].count = 0;
-  blocks->blocks[block_id].capacity = 256;
-  blocks->blocks[block_id].instructions = malloc(blocks->blocks[block_id].capacity * sizeof(Instruction));
+  BasicBlock *block = &blocks->blocks[block_id];
+  *block = (BasicBlock) {0};
+  block->complete = false;
+  block->start_pc = start_pc;
+  block->capacity = 256;
+  block->instructions = malloc(block->capacity * sizeof(Instruction));
 
-  blocks->blocks[block_id].slot_map = malloc(slotcount * sizeof(uint32_t));
+  block->slot_map = malloc(slotcount * sizeof(uint32_t));
   for (int i = 0; i < slotcount; i++) {
-    blocks->blocks[block_id].slot_map[i] = UINT32_MAX;
+    block->slot_map[i] = UINT32_MAX;
   }
 
-  blocks->blocks[block_id].slot_use = calloc(slotcount, sizeof(bool));
-  blocks->blocks[block_id].slot_def = calloc(slotcount, sizeof(bool));
-  blocks->blocks[block_id].live_in =  calloc(slotcount, sizeof(bool));
-  blocks->blocks[block_id].live_out = calloc(slotcount, sizeof(bool));
+  block->slot_use = calloc(slotcount, sizeof(bool));
+  block->slot_def = calloc(slotcount, sizeof(bool));
+  block->live_in =  calloc(slotcount, sizeof(bool));
+  block->live_out = calloc(slotcount, sizeof(bool));
 
-  blocks->blocks[block_id].input_edge_count = 0;
-  blocks->blocks[block_id].input_edge_capacity = 12;
-  blocks->blocks[block_id].input_edges = malloc(blocks->blocks[block_id].input_edge_capacity * sizeof(Edge));
-  blocks->blocks[block_id].output_edge_count = 0;
-  blocks->blocks[block_id].output_edge_capacity = 12;
-  blocks->blocks[block_id].output_edges = malloc(blocks->blocks[block_id].output_edge_capacity * sizeof(Edge));
+  block->input_edge_capacity = 12;
+  block->input_edges = malloc(block->input_edge_capacity * sizeof(Edge));
+  block->output_edge_capacity = 12;
+  block->output_edges = malloc(block->output_edge_capacity * sizeof(Edge));
 
 
   return block_id;
@@ -374,6 +518,116 @@ static void add_slot_use(BasicBlock *block, size_t slot) {
 static void add_slot_def(BasicBlock *block, size_t slot) {
   block->slot_def[slot] = true;
 }
+
+static void ensure_operand_capacity(Operand **operands,
+				    size_t *capacity,
+				    size_t count,
+				    const char *kind) {
+  if (count < *capacity) {
+    return;
+  }
+
+  if (*capacity > SIZE_MAX / 2 ||
+      *capacity * 2 > SIZE_MAX / sizeof(Operand)) {
+    janet_panicf("JIT ran out of memory generating %s operands", kind);
+  }
+
+  size_t old_capacity = *capacity;
+  size_t new_capacity = old_capacity * 2;
+  Operand *new_operands =
+    realloc(*operands, new_capacity * sizeof(Operand));
+  if (new_operands == NULL) {
+    janet_panicf("JIT could not allocate while generating %s operands", kind);
+  }
+
+  memset(new_operands + old_capacity,
+	 0,
+	 (new_capacity - old_capacity) * sizeof(Operand));
+  *operands = new_operands;
+  *capacity = new_capacity;
+}
+
+static size_t new_vreg(MethodBlocks *blocks) {
+  ensure_operand_capacity(&blocks->vregs,
+			  &blocks->vreg_capacity,
+			  blocks->vreg_count,
+			  "virtual register");
+
+  size_t index = blocks->vreg_count++;
+  blocks->vregs[index] = (Operand) {
+    .type = OPERAND_VIRTUAL_REGISTER,
+    .virtual_register = index,
+  };
+  return index;
+}
+
+static size_t new_immus(MethodBlocks *blocks, uint32_t val) {
+  ensure_operand_capacity(&blocks->imms,
+			  &blocks->imm_capacity,
+			  blocks->imm_count,
+			  "immediate");
+
+  size_t index = blocks->imm_count++;
+  blocks->imms[index] = (Operand) {
+    .type = OPERAND_UNSIGNED_IMM,
+    .immus = val,
+  };
+  return index;
+}
+
+static size_t new_bb(MethodBlocks *blocks, uint32_t val) {
+  ensure_operand_capacity(&blocks->bbs,
+			  &blocks->bb_capacity,
+			  blocks->bb_count,
+			  "basic block");
+
+  size_t index = blocks->bb_count++;
+  blocks->bbs[index] = (Operand) {
+    .type = OPERAND_BASIC_BLOCK,
+    .bb = val,
+  };
+  return index;
+}
+
+static size_t new_imms(MethodBlocks *blocks, int32_t val) {
+  ensure_operand_capacity(&blocks->imms,
+			  &blocks->imm_capacity,
+			  blocks->imm_count,
+			  "immediate");
+
+  size_t index = blocks->imm_count++;
+  blocks->imms[index] = (Operand) {
+    .type = OPERAND_SIGNED_IMM,
+    .imms = val,
+  };
+  return index;
+}
+
+static size_t new_jimm(MethodBlocks *blocks, Janet val) {
+  ensure_operand_capacity(&blocks->imms,
+			  &blocks->imm_capacity,
+			  blocks->imm_count,
+			  "immediate");
+
+  size_t index = blocks->imm_count++;
+  blocks->imms[index] = (Operand) {
+    .type = OPERAND_JANET_IMM,
+    .immus = janet_u64(val),
+  };
+  return index;
+}
+
+
+static Operand *vreg_for(MethodBlocks *blocks, size_t vreg_id) {
+  // TODO: can I record last use here?
+  return &blocks->vregs[vreg_id];
+}
+
+static Operand *bb_for(MethodBlocks *blocks, size_t bb_id) {
+  // TODO: can I record last use here?
+  return &blocks->bbs[bb_id];
+}
+
 
 static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t block_id, uint32_t *parent_slot_map) {
   JanetFuncDef *def = fn->def;
@@ -414,13 +668,13 @@ static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t 
 	  instruction->phi_sources[edge_i].slot = slot_i;
 	}
 
-	instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-	slot_map[slot_i] = blocks->virtual_register_count;
-	instruction->result.virtual_register = blocks->virtual_register_count++;
+	instruction->result = new_vreg(blocks);
+	slot_map[slot_i] = instruction->result;
       }
     }
   }
 
+  free(blocks->blocks[block_id].slot_map);
   blocks->blocks[block_id].slot_map = slot_map;
 
   blocks->blocks[block_id].complete = true;
@@ -431,258 +685,64 @@ static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t 
       break;
     case JOP_ERROR: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_ERROR);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[AA];
+      instruction->args[0] = slot_map[AA]; // vreg_for(blocks, slot_map[AA]);
       return;
     }
     case JOP_TYPECHECK: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_TYPECHECK);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[AA];
-      instruction->operand2.type = OPERAND_UNSIGNED_IMM;
-      instruction->operand2.immus = EE;
+      instruction->args[0] = slot_map[AA];
+      instruction->args[1] = new_immus(blocks, EE);
       break;
     }
     case JOP_RETURN: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_RETURN);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[DD];
+      instruction->args[0] = slot_map[DD];
       return;
     }
     case JOP_RETURN_NIL: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_RETURN);
-      instruction->operand1.type = OPERAND_JANET_IMM;
-      instruction->operand1.immus = janet_u64(janet_wrap_nil());
+      Instruction *instruction = add_instruction(blocks, block_id, HIR_RETURN_NIL);
+      instruction->args[0] = new_jimm(blocks, janet_wrap_nil());
       return;
     }
-    case JOP_ADD_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_ADD);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_SIGNED_IMM;
-      instruction->operand2.imms = CS;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+    case JOP_ADD_IMMEDIATE:
+    case JOP_SUBTRACT_IMMEDIATE:
+    case JOP_MULTIPLY_IMMEDIATE:
+    case JOP_DIVIDE_IMMEDIATE:
+    case JOP_SHIFT_RIGHT_IMMEDIATE:
+    case JOP_SHIFT_LEFT_IMMEDIATE:
+    case JOP_SHIFT_RIGHT_UNSIGNED_IMMEDIATE: {
+      Instruction *instruction = add_instruction(blocks, block_id, jop_to_hir[instr & 0x7F]);
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = new_imms(blocks, CS);
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
-    case JOP_ADD: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_ADD);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_SUBTRACT_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_SUB);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_SIGNED_IMM;
-      instruction->operand2.imms = CS;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_SUBTRACT: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_SUB);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_MULTIPLY_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_MUL);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_SIGNED_IMM;
-      instruction->operand2.imms = CS;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_MULTIPLY: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_MUL);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_DIVIDE_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_DIV);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_SIGNED_IMM;
-      instruction->operand2.imms = CS;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_DIVIDE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_DIV);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_DIVIDE_FLOOR: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_DIV_FLOOR);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_MODULO: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_MODULO);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_REMAINDER: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_REMAINDER);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_BAND: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_AND);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_BOR: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_OR);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_BXOR: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_XOR);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+    case JOP_ADD:
+    case JOP_SUBTRACT:
+    case JOP_MULTIPLY:
+    case JOP_DIVIDE:
+    case JOP_DIVIDE_FLOOR:
+    case JOP_MODULO:
+    case JOP_REMAINDER:
+    case JOP_BAND:
+    case JOP_BOR:
+    case JOP_BXOR:
+    case JOP_SHIFT_LEFT:
+    case JOP_SHIFT_RIGHT:
+    case JOP_SHIFT_RIGHT_UNSIGNED: {
+      Instruction *instruction = add_instruction(blocks, block_id, jop_to_hir[instr & 0x7F]);
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_BNOT: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_NOT);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[EE];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_SHIFT_LEFT: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_LSHIFT);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_SHIFT_LEFT_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_LSHIFT);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_SIGNED_IMM;
-      instruction->operand2.imms = CS;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_SHIFT_RIGHT: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_RSHIFT);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_SHIFT_RIGHT_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_RSHIFT);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_SIGNED_IMM;
-      instruction->operand2.imms = CS;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_SHIFT_RIGHT_UNSIGNED: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_RUSHIFT);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
-      break;
-    }
-    case JOP_SHIFT_RIGHT_UNSIGNED_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_RUSHIFT);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_UNSIGNED_IMM;
-      instruction->operand2.immus = CC;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[EE];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_MOVE_FAR: {
@@ -695,175 +755,126 @@ static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t 
     }
     case JOP_JUMP: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_JUMP);
-      instruction->operand1.type = OPERAND_BASIC_BLOCK;
-      instruction->operand1.bb =
-        blocks->block_start_pcs[index + (((int32_t)instr) >> 8)];
+      instruction->args[0] = new_bb(blocks, blocks->block_start_pcs[index + (((int32_t)instr) >> 8)]);
       return;
     }
     case JOP_JUMP_IF: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_JUMP_IF);
-      instruction->operand3.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand3.virtual_register = slot_map[AA];
-      instruction->operand1.type = OPERAND_BASIC_BLOCK;
-      instruction->operand1.bb =
-        blocks->block_start_pcs[index + (((int32_t)instr) >> 16)];
-      instruction->operand2.type = OPERAND_BASIC_BLOCK;
-      instruction->operand2.bb = blocks->block_start_pcs[index + 1];
+      instruction->args[2] = slot_map[AA];
+      instruction->args[0] = new_bb(blocks, blocks->block_start_pcs[index + (((int32_t)instr) >> 16)]);
+      instruction->args[1] = new_bb(blocks, blocks->block_start_pcs[index + 1]);
       return;
     }
     case JOP_JUMP_IF_NOT: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_JUMP_IF_NOT);
-      instruction->operand3.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand3.virtual_register = slot_map[AA];
-      instruction->operand1.type = OPERAND_BASIC_BLOCK;
-      instruction->operand1.bb =
-        blocks->block_start_pcs[index + (((int32_t)instr) >> 16)];
-      instruction->operand2.type = OPERAND_BASIC_BLOCK;
-      instruction->operand2.bb = blocks->block_start_pcs[index + 1];
+      instruction->args[2] = slot_map[AA];
+      instruction->args[0] = new_bb(blocks, blocks->block_start_pcs[index + (((int32_t)instr) >> 16)]);
+      instruction->args[1] = new_bb(blocks, blocks->block_start_pcs[index + 1]);
       return;
     }
     case JOP_JUMP_IF_NIL: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_JUMP_IF_NIL);
-      instruction->operand3.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand3.virtual_register = slot_map[AA];
-      instruction->operand1.type = OPERAND_BASIC_BLOCK;
-      instruction->operand1.bb =
-        blocks->block_start_pcs[index + (((int32_t)instr) >> 16)];
-      instruction->operand2.type = OPERAND_BASIC_BLOCK;
-      instruction->operand2.bb = blocks->block_start_pcs[index + 1];
+      instruction->args[2] = slot_map[AA];
+      instruction->args[0] = new_bb(blocks, blocks->block_start_pcs[index + (((int32_t)instr) >> 16)]);
+      instruction->args[1] = new_bb(blocks, blocks->block_start_pcs[index + 1]);
       return;
     }
     case JOP_JUMP_IF_NOT_NIL: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_JUMP_IF_NOT_NIL);
-      instruction->operand3.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand3.virtual_register = slot_map[AA];
-      instruction->operand1.type = OPERAND_BASIC_BLOCK;
-      instruction->operand1.bb =
-        blocks->block_start_pcs[index + (((int32_t)instr) >> 16)];
-      instruction->operand2.type = OPERAND_BASIC_BLOCK;
-      instruction->operand2.bb = blocks->block_start_pcs[index + 1];
+      instruction->args[2] = slot_map[AA];
+      instruction->args[0] = new_bb(blocks, blocks->block_start_pcs[index + (((int32_t)instr) >> 16)]);
+      instruction->args[1] = new_bb(blocks, blocks->block_start_pcs[index + 1]);
       return;
     }
     case JOP_GREATER_THAN: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_GREATER_THAN);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_GREATER_THAN_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_GREATER_THAN);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_SIGNED_IMM;
-      instruction->operand2.imms = CS;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      Instruction *instruction = add_instruction(blocks, block_id, HIR_GREATER_THAN_IMM);
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = new_imms(blocks, CS);
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_LESS_THAN: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_LESS_THAN);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_LESS_THAN_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_LESS_THAN);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_SIGNED_IMM;
-      instruction->operand2.imms = CS;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      Instruction *instruction = add_instruction(blocks, block_id, HIR_LESS_THAN_IMM);
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = new_imms(blocks, CS);
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_EQUALS: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_EQUALS);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_EQUALS_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_EQUALS);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_SIGNED_IMM;
-      instruction->operand2.imms = CS;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      Instruction *instruction = add_instruction(blocks, block_id, HIR_EQUALS_IMM);
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = new_imms(blocks, CS);
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_COMPARE: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_COMPARE);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_LOAD_NIL: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_LOAD);
-      instruction->operand1.type = OPERAND_JANET_IMM;
-      instruction->operand1.immus = janet_u64(janet_wrap_nil());
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = new_jimm(blocks, janet_wrap_nil());
+      instruction->result = new_vreg(blocks);
+      slot_map[DD] = instruction->result;
       break;
     }
     case JOP_LOAD_TRUE: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_LOAD);
-      instruction->operand1.type = OPERAND_JANET_IMM;
-      instruction->operand1.immus = janet_u64(janet_wrap_true());
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = new_jimm(blocks, janet_wrap_true());
+      instruction->result = new_vreg(blocks);
+      slot_map[DD] = instruction->result;
       break;
     }
     case JOP_LOAD_FALSE: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_LOAD);
-      instruction->operand1.type = OPERAND_JANET_IMM;
-      instruction->operand1.immus = janet_u64(janet_wrap_false());
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = new_jimm(blocks, janet_wrap_false());
+      instruction->result = new_vreg(blocks);
+      slot_map[DD] = instruction->result;
       break;
     }
     case JOP_LOAD_INTEGER: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_LOAD);
-      instruction->operand1.type = OPERAND_SIGNED_IMM;
-      instruction->operand1.imms = ES;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = new_imms(blocks, ES);
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_LOAD_CONSTANT: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_LOAD);
-      instruction->operand1.type = OPERAND_JANET_IMM;
-      instruction->operand1.immus = janet_u64(def->constants[EE]);
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = new_jimm(blocks, def->constants[EE]);
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_LOAD_UPVALUE: {
@@ -872,11 +883,9 @@ static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t 
     }
     case JOP_LOAD_SELF: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_LOAD);
-      instruction->operand1.type = OPERAND_JANET_IMM;
-      instruction->operand1.immus = janet_u64(janet_wrap_function(fn));
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = new_jimm(blocks, janet_wrap_function(fn));
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_SET_UPVALUE: {
@@ -889,26 +898,20 @@ static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t 
     }
     case JOP_PUSH: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_PUSH);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[DD];
+      instruction->args[0] = slot_map[DD];
       break;
     }
     case JOP_PUSH_2: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_PUSH);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[AA];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[EE];
+      Instruction *instruction = add_instruction(blocks, block_id, HIR_PUSH2);
+      instruction->args[0] = slot_map[AA];
+      instruction->args[1] = slot_map[EE];
       break;
     }
     case JOP_PUSH_3: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_PUSH);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[AA];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[BB];
-      instruction->operand3.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand3.virtual_register = slot_map[CC];
+      Instruction *instruction = add_instruction(blocks, block_id, HIR_PUSH3);
+      instruction->args[0] = slot_map[AA];
+      instruction->args[1] = slot_map[BB];
+      instruction->args[2] = slot_map[CC];
       break;
     }
     case JOP_PUSH_ARRAY: {
@@ -917,17 +920,14 @@ static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t 
     }
     case JOP_CALL: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_CALL);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[EE];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[EE];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_TAILCALL: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_TAIL_CALL);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[DD];
+      instruction->args[0] = slot_map[DD];
       return;
     }
     case JOP_RESUME: {
@@ -944,168 +944,129 @@ static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t 
     }
     case JOP_IN: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_IN);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_GET: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_GET);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_PUT: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_PUT);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[AA];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[BB];
-      instruction->operand3.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand3.virtual_register = slot_map[CC];
+      instruction->args[0] = slot_map[AA];
+      instruction->args[1] = slot_map[BB];
+      instruction->args[2] = slot_map[CC];
       break;
     }
     case JOP_GET_INDEX: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_GET);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_UNSIGNED_IMM;
-      instruction->operand2.immus = CC;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      Instruction *instruction = add_instruction(blocks, block_id, HIR_GET_INDEX);
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = new_immus(blocks, CC);
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_PUT_INDEX: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_PUT);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[AA];
-      instruction->operand2.type = OPERAND_UNSIGNED_IMM;
-      instruction->operand2.immus = CC;
-      instruction->operand3.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand3.virtual_register = slot_map[BB];
+      Instruction *instruction = add_instruction(blocks, block_id, HIR_PUT_INDEX);
+      instruction->args[0] = slot_map[AA];
+      instruction->args[1] = new_immus(blocks, CC);
+      instruction->args[2] = slot_map[BB];
       break;
     }
     case JOP_LENGTH: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_LENGTH);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[EE];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[EE];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_MAKE_ARRAY: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_MAKE_ARRAY);
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_MAKE_BUFFER: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_MAKE_BUFFER);
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_MAKE_STRING: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_MAKE_STRING);
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_MAKE_STRUCT: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_MAKE_STRUCT);
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_MAKE_TABLE: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_MAKE_TABLE);
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_MAKE_TUPLE: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_MAKE_TUPLE);
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_MAKE_BRACKET_TUPLE: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_MAKE_BRACKET_TUPLE);
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[DD] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_GREATER_THAN_EQUAL: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_GREATER_THAN_EQUAL);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_LESS_THAN_EQUAL: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_LESS_THAN_EQUAL);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_NEXT: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_NEXT);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_NOT_EQUALS: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_NOT_EQUALS);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand2.virtual_register = slot_map[CC];
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = slot_map[CC];
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_NOT_EQUALS_IMMEDIATE: {
-      Instruction *instruction = add_instruction(blocks, block_id, HIR_NOT_EQUALS);
-      instruction->operand1.type = OPERAND_VIRTUAL_REGISTER;
-      instruction->operand1.virtual_register = slot_map[BB];
-      instruction->operand2.type = OPERAND_SIGNED_IMM;
-      instruction->operand2.imms = CS;
-      instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-      slot_map[AA] = blocks->virtual_register_count;
-      instruction->result.virtual_register = blocks->virtual_register_count++;
+      Instruction *instruction = add_instruction(blocks, block_id, HIR_NOT_EQUALS_IMM);
+      instruction->args[0] = slot_map[BB];
+      instruction->args[1] = new_imms(blocks, CC);
+      instruction->result = new_vreg(blocks);
+      slot_map[AA] = instruction->result;
       break;
     }
     case JOP_CANCEL: {
@@ -1116,8 +1077,7 @@ static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t 
   }
   // reached end due to leader / jump target instruction
   Instruction *instruction = add_instruction(blocks, block_id, HIR_JUMP);
-  instruction->operand1.type = OPERAND_BASIC_BLOCK;
-  instruction->operand1.bb = blocks->block_start_pcs[blocks->blocks[block_id].finish_pc];
+  instruction->args[0] = new_bb(blocks, blocks->block_start_pcs[blocks->blocks[block_id].finish_pc]);
 }
 
 static void rpo_order(MethodBlocks *blocks, size_t block_id, bool *visited, size_t *list, size_t *count) {
@@ -1130,46 +1090,163 @@ static void rpo_order(MethodBlocks *blocks, size_t block_id, bool *visited, size
   list[(*count)++] = block_id;
 }
 
-static void replace_virtual_register(MethodBlocks *blocks, size_t slotcount, size_t old, size_t new) {
+#define VREG_ARG0 (1u << 0)
+#define VREG_ARG1 (1u << 1)
+#define VREG_ARG2 (1u << 2)
+
+typedef struct {
+  uint8_t vregs;
+  uint8_t imms;
+  uint8_t bbs;
+} InstructionArgs;
+
+static InstructionArgs instruction_args(InstructionType type) {
+  switch (type) {
+  case HIR_ERROR:
+  case HIR_RETURN:
+  case HIR_NOT:
+  case HIR_PUSH:
+  case HIR_CALL:
+  case HIR_TAIL_CALL:
+  case HIR_LENGTH:
+    return (InstructionArgs) {
+      .vregs = VREG_ARG0,
+    };
+
+  case HIR_ADD:
+  case HIR_SUB:
+  case HIR_MUL:
+  case HIR_DIV:
+  case HIR_DIV_FLOOR:
+  case HIR_MODULO:
+  case HIR_REMAINDER:
+  case HIR_AND:
+  case HIR_OR:
+  case HIR_XOR:
+  case HIR_LSHIFT:
+  case HIR_RSHIFT:
+  case HIR_RUSHIFT:
+  case HIR_GREATER_THAN:
+  case HIR_LESS_THAN:
+  case HIR_EQUALS:
+  case HIR_COMPARE:
+  case HIR_PUSH2:
+  case HIR_IN:
+  case HIR_GET:
+  case HIR_GREATER_THAN_EQUAL:
+  case HIR_LESS_THAN_EQUAL:
+  case HIR_NEXT:
+  case HIR_NOT_EQUALS:
+    return (InstructionArgs) {
+      .vregs = VREG_ARG0 | VREG_ARG1,
+    };
+
+  case HIR_TYPECHECK:
+  case HIR_ADD_IMM:
+  case HIR_SUB_IMM:
+  case HIR_MUL_IMM:
+  case HIR_DIV_IMM:
+  case HIR_LSHIFT_IMM:
+  case HIR_RSHIFT_IMM:
+  case HIR_RUSHIFT_IMM:
+  case HIR_GREATER_THAN_IMM:
+  case HIR_LESS_THAN_IMM:
+  case HIR_EQUALS_IMM:
+  case HIR_GET_INDEX:
+  case HIR_NOT_EQUALS_IMM:
+    return (InstructionArgs) {
+      .vregs = VREG_ARG0,
+      .imms = VREG_ARG1,
+    };
+
+  case HIR_RETURN_NIL:
+  case HIR_LOAD:
+  case HIR_LOAD_ARG:
+    return (InstructionArgs) {
+      .imms = VREG_ARG0,
+    };
+
+  case HIR_JUMP:
+    return (InstructionArgs) {
+      .bbs = VREG_ARG0,
+    };
+
+  case HIR_JUMP_IF:
+  case HIR_JUMP_IF_NOT:
+  case HIR_JUMP_IF_NIL:
+  case HIR_JUMP_IF_NOT_NIL:
+    return (InstructionArgs) {
+      .vregs = VREG_ARG2,
+      .bbs = VREG_ARG0 | VREG_ARG1,
+    };
+
+  case HIR_PUT_INDEX:
+    return (InstructionArgs) {
+      .vregs = VREG_ARG0 | VREG_ARG2,
+      .imms = VREG_ARG1,
+    };
+
+  case HIR_PUSH3:
+  case HIR_PUT:
+    return (InstructionArgs) {
+      .vregs = VREG_ARG0 | VREG_ARG1 | VREG_ARG2,
+    };
+
+  default:
+    return (InstructionArgs) {0};
+  }
+}
+
+static uint8_t instruction_vreg_args(InstructionType type) {
+  return instruction_args(type).vregs;
+}
+
+static void replace_virtual_register(MethodBlocks *blocks,
+				     size_t slotcount,
+				     size_t old_vreg,
+				     size_t new_vreg) {
+  if (old_vreg == new_vreg) {
+    return;
+  }
+
   for (size_t block_i = 0; block_i < blocks->count; block_i++) {
     BasicBlock *block = &blocks->blocks[block_i];
+
     for (size_t slot_i = 0; slot_i < slotcount; slot_i++) {
-      if (block->slot_map[slot_i] == old) {
-	block->slot_map[slot_i] = new;
+      if (block->slot_map[slot_i] == old_vreg) {
+	block->slot_map[slot_i] = new_vreg;
       }
     }
 
-    for (size_t i = 0; i < block->count; i++) {
-      Instruction *instr = &block->instructions[i];
-      if (instr->operand1.type == OPERAND_VIRTUAL_REGISTER && instr->operand1.virtual_register == old) {
-	instr->operand1.virtual_register = new;
+    for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
+      Instruction *instr = &block->instructions[instr_i];
+      uint8_t vreg_args = instruction_vreg_args(instr->type);
+
+      for (size_t arg_i = 0; arg_i < 3; arg_i++) {
+	if ((vreg_args & (1u << arg_i)) &&
+	    instr->args[arg_i] == old_vreg) {
+	  instr->args[arg_i] = new_vreg;
+	}
       }
 
-      if (instr->operand2.type == OPERAND_VIRTUAL_REGISTER && instr->operand2.virtual_register == old) {
-	instr->operand2.virtual_register = new;
-      }
-
-      if (instr->operand3.type == OPERAND_VIRTUAL_REGISTER && instr->operand3.virtual_register == old) {
-	instr->operand3.virtual_register = new;
-      }
-
-      switch (instr->type) {
-      case HIR_PHI: {
-	for (size_t i = 0; i < instr->phi_source_count; i++) {
-	  PhiSource *source = &instr->phi_sources[i];
-	  if (source->virtual_register == old) {
-	    source->virtual_register = new;
+      if (instr->type == HIR_PHI ||
+	  instr->type == HIR_PHI_PLACEHOLDER) {
+	for (size_t source_i = 0;
+	     source_i < instr->phi_source_count;
+	     source_i++) {
+	  PhiSource *source = &instr->phi_sources[source_i];
+	  if (source->virtual_register == old_vreg) {
+	    source->virtual_register = new_vreg;
 	  }
 	}
-	break;
-      }
-      default:
-	// noop
-	break;
       }
     }
   }
 }
+
+#undef VREG_ARG0
+#undef VREG_ARG1
+#undef VREG_ARG2
 
 void build_basic_blocks(MethodBlocks *blocks, JanetFunction *fn) {
   // mark leaders
@@ -1399,11 +1476,9 @@ void build_basic_blocks(MethodBlocks *blocks, JanetFunction *fn) {
   }
   for (int i = 0; i < fn->def->arity; i++) {
     Instruction *instruction = add_instruction(blocks, 0, HIR_LOAD_ARG);
-    instruction->operand1.type = OPERAND_UNSIGNED_IMM;
-    instruction->operand1.immus = i;
-    instruction->result.type = OPERAND_VIRTUAL_REGISTER;
-    slot_map[i] = blocks->virtual_register_count;
-    instruction->result.virtual_register = blocks->virtual_register_count++;
+    instruction->args[0] = new_immus(blocks, i);
+    instruction->result = new_vreg(blocks);
+    slot_map[i] = instruction->result;
   }
 
   // rpo order
@@ -1415,6 +1490,9 @@ void build_basic_blocks(MethodBlocks *blocks, JanetFunction *fn) {
   while (count > 0) {
     compile_bb_bytecode(blocks, fn, list[--count], slot_map);
   }
+  free(slot_map);
+  free(list);
+  free(visited);
 
   // resolve phis
   changed = true;
@@ -1445,7 +1523,7 @@ void build_basic_blocks(MethodBlocks *blocks, JanetFunction *fn) {
 	  for (size_t i = 0; i < instr->phi_source_count; i++) {
 	    PhiSource *source = &instr->phi_sources[i];
 
-	    if (source->virtual_register == instr->result.virtual_register) {
+	    if (source->virtual_register == instr->result) {
 	      continue;
 	    }
 
@@ -1461,9 +1539,14 @@ void build_basic_blocks(MethodBlocks *blocks, JanetFunction *fn) {
 	  if (!found_source) {
 	    instr->type = HIR_NOOP;
 	  } else if (!needs_phi) {
+	    size_t old_result = instr->result;
 	    instr->type = HIR_NOOP;
+	    instr->result = 0;
+	    replace_virtual_register(blocks,
+				     fn->def->slotcount,
+				     old_result,
+				     replacement);
 	    changed = true;
-	    replace_virtual_register(blocks, fn->def->slotcount, instr->result.virtual_register, replacement);
 	  }
 	}
       }
@@ -1472,11 +1555,12 @@ void build_basic_blocks(MethodBlocks *blocks, JanetFunction *fn) {
 
   // TODO: technically, this number can be lowered if `replace_virtaul_register` has run.
   // but reducing the number would require renumbering.
-  blocks->virtual_register_types = calloc(blocks->virtual_register_count, sizeof(uint32_t));
-
+  blocks->virtual_register_types = calloc(blocks->vreg_count, sizeof(uint32_t));
 
   // lower phis
   // TODO
+
+  free(leaders);
 }
 
 static uint32_t operand_type(MethodBlocks *blocks, Operand *op) {
@@ -1518,6 +1602,7 @@ void type_flow(MethodBlocks *blocks, int32_t argc, Janet *argv) {
 	case HIR_NOOP:
 	case HIR_ERROR:
 	case HIR_RETURN:
+	case HIR_RETURN_NIL:
 	case HIR_JUMP:
 	case HIR_JUMP_IF:
 	case HIR_JUMP_IF_NOT:
@@ -1525,7 +1610,10 @@ void type_flow(MethodBlocks *blocks, int32_t argc, Janet *argv) {
 	case HIR_JUMP_IF_NOT_NIL:
 	case HIR_TAIL_CALL:
 	case HIR_PUT:
+	case HIR_PUT_INDEX:
 	case HIR_PUSH:
+	case HIR_PUSH2:
+	case HIR_PUSH3:
 	  // noop
 	  break;
 	case HIR_TYPECHECK:
@@ -1545,83 +1633,100 @@ void type_flow(MethodBlocks *blocks, int32_t argc, Janet *argv) {
 	case HIR_RSHIFT:
 	case HIR_RUSHIFT: {
 	  // op1 is alwasy a virtual register.
-	  uint32_t lhs = operand_type(blocks, &instr->operand1);
-	  uint32_t rhs = operand_type(blocks, &instr->operand2);
+	  uint32_t lhs = operand_type(blocks, &blocks->vregs[instr->args[0]]);
+	  uint32_t rhs = operand_type(blocks, &blocks->vregs[instr->args[1]]);
 	  if (lhs == 0 || rhs == 0) {
 	    // too early to know
 	  } else if (lhs == JANET_TFLAG_NUMBER && rhs == JANET_TFLAG_NUMBER) {
-	    add_type(blocks, instr->result.virtual_register, JANET_TFLAG_NUMBER, &changed);
+	    add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
 	  } else {
-	    add_type(blocks, instr->result.virtual_register, JIT_JANET_TFLAG_ANY, &changed);
+	    add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
 	  }
+	  break;
+	}
+	case HIR_ADD_IMM:
+	case HIR_SUB_IMM:
+	case HIR_MUL_IMM:
+	case HIR_DIV_IMM:
+	case HIR_LSHIFT_IMM:
+	case HIR_RSHIFT_IMM:
+	case HIR_RUSHIFT_IMM: {
+	  // TODO: double check Janet only outputs this for numbers
+	  add_type(blocks, instr->args[0], JANET_TFLAG_NUMBER, &changed);
+	  add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
 	  break;
 	}
 	case HIR_NOT: {
 	  // op1 is alwasy a virtual register.
-	  uint32_t val = operand_type(blocks, &instr->operand1);
+	  uint32_t val = operand_type(blocks, &blocks->vregs[instr->args[0]]);
 	  if (val == 0) {
 	    // too early to know
 	  } else if (val == JANET_TFLAG_NUMBER) {
-	    add_type(blocks, instr->result.virtual_register, JANET_TFLAG_NUMBER, &changed);
+	    add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
 	  } else {
-	    add_type(blocks, instr->result.virtual_register, JIT_JANET_TFLAG_ANY, &changed);
+	    add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
 	  }
 	  break;
 	}
 	case HIR_COMPARE:
-	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_NUMBER, &changed);
+	  add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
 	  break;
 	case HIR_GREATER_THAN:
 	case HIR_LESS_THAN:
 	case HIR_EQUALS:
+	case HIR_GREATER_THAN_IMM:
+	case HIR_LESS_THAN_IMM:
+	case HIR_EQUALS_IMM:
 	case HIR_GREATER_THAN_EQUAL:
 	case HIR_LESS_THAN_EQUAL:
 	case HIR_NOT_EQUALS:
-	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_BOOLEAN, &changed);
+	  add_type(blocks, instr->result, JANET_TFLAG_BOOLEAN, &changed);
 	  break;
 	case HIR_LOAD:
-	  add_type(blocks, instr->result.virtual_register, operand_type(blocks, &instr->operand1), &changed);
+	  add_type(blocks, instr->result, operand_type(blocks, &blocks->imms[instr->args[0]]), &changed);
 	  break;
 	case HIR_LOAD_ARG:
-	  add_type(blocks, instr->result.virtual_register, 1u << janet_type(argv[instr->operand1.immus]), &changed);
+	  add_type(blocks, instr->result, 1u << janet_type(argv[blocks->imms[instr->args[0]].immus]), &changed);
 	  break;
 	case HIR_CALL:
 	case HIR_IN:
 	case HIR_GET:
+	case HIR_GET_INDEX:
 	case HIR_NEXT:
-	  add_type(blocks, instr->result.virtual_register, JIT_JANET_TFLAG_ANY, &changed);
+	  add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
 	  break;
 	case HIR_LENGTH:
-	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_NUMBER, &changed);
+	  add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
 	  break;
 	case HIR_MAKE_ARRAY:
-	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_ARRAY, &changed);
+	  add_type(blocks, instr->result, JANET_TFLAG_ARRAY, &changed);
 	  break;
 	case HIR_MAKE_BUFFER:
-	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_BUFFER, &changed);
+	  add_type(blocks, instr->result, JANET_TFLAG_BUFFER, &changed);
 	  break;
 	case HIR_MAKE_STRING:
-	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_STRING, &changed);
+	  add_type(blocks, instr->result, JANET_TFLAG_STRING, &changed);
 	  break;
 	case HIR_MAKE_STRUCT:
-	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_STRUCT, &changed);
+	  add_type(blocks, instr->result, JANET_TFLAG_STRUCT, &changed);
 	  break;
 	case HIR_MAKE_TABLE:
-	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_TABLE, &changed);
+	  add_type(blocks, instr->result, JANET_TFLAG_TABLE, &changed);
 	  break;
 	case HIR_MAKE_TUPLE:
 	case HIR_MAKE_BRACKET_TUPLE:
-	  add_type(blocks, instr->result.virtual_register, JANET_TFLAG_TUPLE, &changed);
+	  add_type(blocks, instr->result, JANET_TFLAG_TUPLE, &changed);
 	  break;
 	case HIR_PHI: {
 	  for (size_t i = 0; i < instr->phi_source_count; i++) {
 	    PhiSource *source = &instr->phi_sources[i];
-	    add_type(blocks, instr->result.virtual_register, blocks->virtual_register_types[source->virtual_register], &changed);
+	    add_type(blocks, instr->result, blocks->virtual_register_types[source->virtual_register], &changed);
 	  }
 	  break;
 	}
 	case HIR_PHI_PLACEHOLDER:
 	  // TODO: assert unreachable
+	  /* assert(false); */
 	  break;
 	}
       }
@@ -1700,22 +1805,24 @@ void print_basic_blocks(MethodBlocks *blocks) {
     for (size_t instr_i = 0; instr_i < bb->count; instr_i++) {
       Instruction *instruction = &bb->instructions[instr_i];
       printf("%zu. ", instr_i);
-      print_ops(blocks, &instruction->result);
+      if (instruction->result != 0) {
+	print_ops(blocks, &blocks->vregs[instruction->result]);
 	printf(" = ");
+      }
       printf("%s [", instruction_names[instruction->type]);
       if (instruction->type == HIR_PHI) {
-	print_ops(blocks, &instruction->result);
+	print_ops(blocks, &blocks->vregs[instruction->result]);
 	printf(", ");
 	for (size_t i = 0; i < instruction->phi_source_count; i++) {
 	  printf("(bb%zu: v%zu) ", instruction->phi_sources[i].bb, instruction->phi_sources[i].virtual_register);
 	}
       } else {
-
-	print_ops(blocks, &instruction->operand1);
+	// TODO: this is wrong for imm right now
+	print_ops(blocks, &blocks->vregs[instruction->args[0]]);
 	printf(", ");
-	print_ops(blocks, &instruction->operand2);
+	print_ops(blocks, &blocks->vregs[instruction->args[1]]);
 	printf(", ");
-	print_ops(blocks, &instruction->operand3);
+	print_ops(blocks, &blocks->vregs[instruction->args[2]]);
       }
       printf("]\n");
     }
@@ -2146,7 +2253,11 @@ static void emit_operand_to_xmm(CodeBuffer *code, uint32_t destination, Operand 
     emit_stack_to_xmm(code, destination, operand->virtual_register);
     return;
   }
+  emit_imm_gpr(code, 0, operand_to_janet_bits(operand));
+  emit_gpr_to_xmm(code, destination, 0);
+}
 
+static void emit_imm_to_xmm(CodeBuffer *code, uint32_t destination, Operand *operand) {
   emit_imm_gpr(code, 0, operand_to_janet_bits(operand));
   emit_gpr_to_xmm(code, destination, 0);
 }
@@ -2419,7 +2530,7 @@ static void emit_phi_moves(CodeBuffer *code, MethodBlocks *blocks, uint32_t bb_s
     if (target_block->instructions[pc].type == HIR_PHI) {
       for (size_t phi_i = 0; phi_i < target_block->instructions[pc].phi_source_count; phi_i++) {
 	if (target_block->instructions[pc].phi_sources[phi_i].bb == bb_source) {
-	  emit_mov(code, target_block->instructions[pc].result.virtual_register, target_block->instructions[pc].phi_sources[phi_i].virtual_register);
+	  emit_mov(code, target_block->instructions[pc].result, target_block->instructions[pc].phi_sources[phi_i].virtual_register);
 	}
       }
     }
@@ -2427,6 +2538,29 @@ static void emit_phi_moves(CodeBuffer *code, MethodBlocks *blocks, uint32_t bb_s
 }
 
 static void emit_jump_placeholder(CodeBuffer *code, int32_t pc, size_t target_bb) {
+  if (code->jump_index >= code->jump_capacity) {
+    if (code->jump_capacity > SIZE_MAX / 2 ||
+	code->jump_capacity * 2 > SIZE_MAX / sizeof(size_t)) {
+      janet_panic("JIT ran out of memory generating jump placeholders");
+    }
+
+    size_t new_capacity = code->jump_capacity * 2;
+    size_t *new_targets =
+      realloc(code->jump_targets, new_capacity * sizeof(size_t));
+    if (new_targets == NULL) {
+      janet_panic("JIT could not allocate while generating jump placeholders");
+    }
+    code->jump_targets = new_targets;
+
+    size_t *new_locations =
+      realloc(code->jump_locations, new_capacity * sizeof(size_t));
+    if (new_locations == NULL) {
+      janet_panic("JIT could not allocate while generating jump placeholders");
+    }
+    code->jump_locations = new_locations;
+    code->jump_capacity = new_capacity;
+  }
+
   code->jump_targets[code->jump_index] = target_bb;
   code->jump_locations[code->jump_index] = code->count;
   code->jump_index++;
@@ -2434,20 +2568,23 @@ static void emit_jump_placeholder(CodeBuffer *code, int32_t pc, size_t target_bb
 }
 
 static void emit_binary_fallback(CodeBuffer *code, Instruction *instr, JitBinaryFallback fallback) {
-  emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
-  if (instr->operand2.type == OPERAND_VIRTUAL_REGISTER) {
-    emit_stack_to_arg(code, 1, instr->operand2.virtual_register);
-  } else {
-    emit_imm_to_arg(code, 1, operand_to_janet_bits(&instr->operand2));
-  }
+  emit_stack_to_arg(code, 0, instr->args[0]);
+  emit_stack_to_arg(code, 1, instr->args[1]);
   emit_cfun_call(code, fallback);
-  emit_store_ret(code, instr->result.virtual_register);
+  emit_store_ret(code, instr->result);
+}
+
+static void emit_binary_imm_fallback(CodeBuffer *code, Instruction *instr, Operand *imm, JitBinaryFallback fallback) {
+  emit_stack_to_arg(code, 0, instr->args[0]);
+  emit_imm_to_arg(code, 1, operand_to_janet_bits(imm));
+  emit_cfun_call(code, fallback);
+  emit_store_ret(code, instr->result);
 }
 
 static void emit_unary_fallback(CodeBuffer *code, Instruction *instr, JitUnaryFallback fallback) {
-  emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
+  emit_stack_to_arg(code, 0, instr->args[0]);
   emit_cfun_call(code, fallback);
-  emit_store_ret(code, instr->result.virtual_register);
+  emit_store_ret(code, instr->result);
 }
 
 void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uint32_t block_id) {
@@ -2461,23 +2598,29 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_ERROR: {
-      emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[0]);
       emit_cfun_call(code, janet_panicv);
       break;
     }
     case HIR_TYPECHECK: {
-      emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
-      emit_imm_to_arg(code, 1, instr->operand2.immus);
+      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_imm_to_arg(code, 1, blocks->imms[instr->args[1]].immus);
       emit_cfun_call(code, jit_typecheck);
       break;
     }
     case HIR_RETURN: {
-      if (instr->operand1.type == OPERAND_VIRTUAL_REGISTER) {
-	emit_stack_to_rax(code, instr->operand1.virtual_register);
-      } else {
-	emit_imm_gpr(code, 0, instr->operand1.immus);
+      emit_stack_to_rax(code, instr->args[0]);
+      if (stack_size > 0) {
+	emit_byte(code, 0x48);
+	emit_byte(code, 0x81);
+	emit_byte(code, 0xC4);
+	emit_u32(code, stack_size);
       }
-
+      emit_byte(code, 0xC3);
+      break;
+    }
+    case HIR_RETURN_NIL: {
+      emit_imm_gpr(code, 0, blocks->imms[instr->args[0]].immus);
       if (stack_size > 0) {
 	emit_byte(code, 0x48);
 	emit_byte(code, 0x81);
@@ -2488,130 +2631,174 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_ADD: {
-      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
-	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
-	emit_operand_to_xmm(code, 1, &instr->operand2);
-	emit_binary_op(code, X86_ADD, instr->result.virtual_register, 0, 1);
-	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_stack_to_xmm(code, 1, instr->args[1]);
+	emit_binary_op(code, X86_ADD, instr->result, 0, 1);
+	emit_xmm_to_stack(code, instr->result, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_add_fallback);
+      }
+      break;
+    }
+    case HIR_ADD_IMM: {
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_imm_to_xmm(code, 1, &blocks->imms[instr->args[1]]);
+	emit_binary_op(code, X86_ADD, instr->result, 0, 1);
+	emit_xmm_to_stack(code, instr->result, 0);
       } else {
 	emit_binary_fallback(code, instr, jit_add_fallback);
       }
       break;
     }
     case HIR_SUB: {
-      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
-	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
-	emit_operand_to_xmm(code, 1, &instr->operand2);
-	emit_binary_op(code, X86_SUB, instr->result.virtual_register, 0, 1);
-	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_stack_to_xmm(code, 1, instr->args[1]);
+	emit_binary_op(code, X86_SUB, instr->result, 0, 1);
+	emit_xmm_to_stack(code, instr->result, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_sub_fallback);
+      }
+      break;
+    }
+    case HIR_SUB_IMM: {
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_imm_to_xmm(code, 1, &blocks->imms[instr->args[1]]);
+	emit_binary_op(code, X86_SUB, instr->result, 0, 1);
+	emit_xmm_to_stack(code, instr->result, 0);
       } else {
 	emit_binary_fallback(code, instr, jit_sub_fallback);
       }
       break;
     }
     case HIR_MUL: {
-      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
-	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
-	emit_operand_to_xmm(code, 1, &instr->operand2);
-	emit_binary_op(code, X86_MUL, instr->result.virtual_register, 0, 1);
-	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_stack_to_xmm(code, 1, instr->args[1]);
+	emit_binary_op(code, X86_MUL, instr->result, 0, 1);
+	emit_xmm_to_stack(code, instr->result, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_mul_fallback);
+      }
+      break;
+    }
+    case HIR_MUL_IMM: {
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_imm_to_xmm(code, 1, &blocks->imms[instr->args[1]]);
+	emit_binary_op(code, X86_MUL, instr->result, 0, 1);
+	emit_xmm_to_stack(code, instr->result, 0);
       } else {
 	emit_binary_fallback(code, instr, jit_mul_fallback);
       }
       break;
     }
     case HIR_DIV: {
-      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
-	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
-	emit_operand_to_xmm(code, 1, &instr->operand2);
-	emit_binary_op(code, X86_DIV, instr->result.virtual_register, 0, 1);
-	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_stack_to_xmm(code, 1, instr->args[1]);
+	emit_binary_op(code, X86_DIV, instr->result, 0, 1);
+	emit_xmm_to_stack(code, instr->result, 0);
+      } else {
+	emit_binary_fallback(code, instr, jit_div_fallback);
+      }
+      break;
+    }
+    case HIR_DIV_IMM: {
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_imm_to_xmm(code, 1, &blocks->imms[instr->args[1]]);
+	emit_binary_op(code, X86_DIV, instr->result, 0, 1);
+	emit_xmm_to_stack(code, instr->result, 0);
       } else {
 	emit_binary_fallback(code, instr, jit_div_fallback);
       }
       break;
     }
     case HIR_DIV_FLOOR: {
-      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
-	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
-	emit_stack_to_xmm(code, 1, instr->operand2.virtual_register);
-	emit_binary_op(code, X86_DIV, instr->result.virtual_register, 0, 1);
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_stack_to_xmm(code, 1, instr->args[1]);
+	emit_binary_op(code, X86_DIV, instr->result, 0, 1);
 	emit_floor(code, 0);
-	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+	emit_xmm_to_stack(code, instr->result, 0);
       } else {
 	emit_binary_fallback(code, instr, jit_divf_fallback);
       }
       break;
     }
     case HIR_MODULO: {
-      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
-	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
-	emit_stack_to_xmm(code, 1, instr->operand1.virtual_register);
-	emit_stack_to_xmm(code, 2, instr->operand2.virtual_register);
-	emit_binary_op(code, X86_DIV, instr->result.virtual_register, 1, 2);
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_stack_to_xmm(code, 1, instr->args[0]);
+	emit_stack_to_xmm(code, 2, instr->args[1]);
+	emit_binary_op(code, X86_DIV, instr->result, 1, 2);
 	emit_floor(code, 1);
-	emit_binary_op(code, X86_MUL, instr->result.virtual_register, 1, 2);
-	emit_binary_op(code, X86_SUB, instr->result.virtual_register, 0, 1);
-	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+	emit_binary_op(code, X86_MUL, instr->result, 1, 2);
+	emit_binary_op(code, X86_SUB, instr->result, 0, 1);
+	emit_xmm_to_stack(code, instr->result, 0);
       } else {
 	emit_binary_fallback(code, instr, jit_mod_fallback);
       }
       break;
     }
     case HIR_REMAINDER: {
-      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
-	emit_stack_to_xmm(code, 0, instr->operand1.virtual_register);
-	emit_stack_to_xmm(code, 1, instr->operand1.virtual_register);
-	emit_stack_to_xmm(code, 2, instr->operand2.virtual_register);
-	emit_binary_op(code, X86_DIV, instr->result.virtual_register, 1, 2);
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
+	emit_stack_to_xmm(code, 0, instr->args[0]);
+	emit_stack_to_xmm(code, 1, instr->args[0]);
+	emit_stack_to_xmm(code, 2, instr->args[1]);
+	emit_binary_op(code, X86_DIV, instr->result, 1, 2);
 	emit_trunc(code, 1);
-	emit_binary_op(code, X86_MUL, instr->result.virtual_register, 1, 2);
-	emit_binary_op(code, X86_SUB, instr->result.virtual_register, 0, 1);
-	emit_xmm_to_stack(code, instr->result.virtual_register, 0);
+	emit_binary_op(code, X86_MUL, instr->result, 1, 2);
+	emit_binary_op(code, X86_SUB, instr->result, 0, 1);
+	emit_xmm_to_stack(code, instr->result, 0);
       } else {
 	emit_binary_fallback(code, instr, jit_rem_fallback);
       }
       break;
     }
     case HIR_AND: {
-      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
 	// Should do I do range checks here, or just say, "The jit rolls over"
-	emit_stack_to_gpr(code, 0, instr->operand1.virtual_register);
-	emit_stack_to_gpr(code, 1, instr->operand2.virtual_register);
+	emit_stack_to_gpr(code, 0, instr->args[0]);
+	emit_stack_to_gpr(code, 1, instr->args[1]);
 	emit_gpr_op(code, X86_AND_GPR, 0, 1);
-	emit_gpr_to_stack(code, instr->result.virtual_register, 0);
+	emit_gpr_to_stack(code, instr->result, 0);
       } else {
 	emit_binary_fallback(code, instr, jit_band_fallback);
       }
       break;
     }
     case HIR_OR: {
-      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
-	emit_stack_to_gpr(code, 0, instr->operand1.virtual_register);
-	emit_stack_to_gpr(code, 1, instr->operand2.virtual_register);
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
+	emit_stack_to_gpr(code, 0, instr->args[0]);
+	emit_stack_to_gpr(code, 1, instr->args[1]);
 	emit_gpr_op(code, X86_OR_GPR, 0, 1);
-	emit_gpr_to_stack(code, instr->result.virtual_register, 0);
+	emit_gpr_to_stack(code, instr->result, 0);
       } else {
 	emit_binary_fallback(code, instr, jit_bor_fallback);
       }
       break;
     }
     case HIR_XOR: {
-      if (operands_numeric(blocks->virtual_register_types, &instr->operand1, &instr->operand2)) {
-	emit_stack_to_gpr(code, 0, instr->operand1.virtual_register);
-	emit_stack_to_gpr(code, 1, instr->operand2.virtual_register);
+      if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
+	emit_stack_to_gpr(code, 0, instr->args[0]);
+	emit_stack_to_gpr(code, 1, instr->args[1]);
 	emit_gpr_op(code, X86_XOR_GPR, 0, 1);
-	emit_gpr_to_stack(code, instr->result.virtual_register, 0);
+	emit_gpr_to_stack(code, instr->result, 0);
       } else {
 	emit_binary_fallback(code, instr, jit_bxor_fallback);
       }
       break;
     }
     case HIR_NOT: {
-      if (operand_numeric(blocks->virtual_register_types, &instr->operand1)) {
-	emit_stack_to_gpr(code, 0, instr->operand1.virtual_register);
+      if (operand_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]])) {
+	emit_stack_to_gpr(code, 0, instr->args[0]);
 	emit_not(code, 0);
-	emit_gpr_to_stack(code, instr->result.virtual_register, 0);
+	emit_gpr_to_stack(code, instr->result, 0);
       } else {
 	emit_unary_fallback(code, instr, jit_bnot_fallback);
       }
@@ -2627,6 +2814,16 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       emit_binary_fallback(code, instr, jit_blshift_fallback);
       break;
     }
+    case HIR_LSHIFT_IMM: {
+      /* emit_shift(code, */
+      /* 		 X86_SHIFT_LEFT, */
+      /* 		 true, */
+      /* 		 instr->result.virtual_register, */
+      /* 		 instr->operand1.virtual_register, */
+      /* 		 &instr->operand2); */
+      emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_blshift_fallback);
+      break;
+    }
     case HIR_RSHIFT: {
       /* emit_shift(code, */
       /* 		 X86_SHIFT_RIGHT_SIGNED, */
@@ -2635,6 +2832,16 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       /* 		 instr->operand1.virtual_register, */
       /* 		 &instr->operand2); */
       emit_binary_fallback(code, instr, jit_brshift_fallback);
+      break;
+    }
+    case HIR_RSHIFT_IMM: {
+      /* emit_shift(code, */
+      /* 		 X86_SHIFT_RIGHT_SIGNED, */
+      /* 		 true, */
+      /* 		 instr->result.virtual_register, */
+      /* 		 instr->operand1.virtual_register, */
+      /* 		 &instr->operand2); */
+      emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_brshift_fallback);
       break;
     }
     case HIR_RUSHIFT: {
@@ -2647,14 +2854,24 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       emit_binary_fallback(code, instr, jit_brushift_fallback);
       break;
     }
+    case HIR_RUSHIFT_IMM: {
+      /* emit_shift(code, */
+      /* 		 X86_SHIFT_RIGHT_UNSIGNED, */
+      /* 		 false, */
+      /* 		 instr->result.virtual_register, */
+      /* 		 instr->operand1.virtual_register, */
+      /* 		 &instr->operand2); */
+      emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_brushift_fallback);
+      break;
+    }
     case HIR_JUMP: {
-      emit_phi_moves(code, blocks, block_id, instr->operand1.bb);
+      emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[0]].bb);
       emit_byte(code, 0xE9); // unconditional jump
-      emit_jump_placeholder(code, code->count, instr->operand1.bb);
+      emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[0]].bb);
       break;
     }
     case HIR_JUMP_IF: {
-      emit_stack_to_arg(code, 0, instr->operand3.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[2]);
       emit_cfun_call(code, janet_truthy);
       // compare
       emit_byte(code, 0x85);
@@ -2670,20 +2887,20 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       emit_u32(code, 0);
 
       // phis for if not case
-      emit_phi_moves(code, blocks, block_id, instr->operand1.bb);
+      emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[0]].bb);
       emit_byte(code, 0xE9); // unconditional jump
-      emit_jump_placeholder(code, code->count, instr->operand1.bb);
+      emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[0]].bb);
 
       edit_u32(code, internal_jump_pc, code->count - (internal_jump_pc + 4));
       // phis for conditional false destination <A>
-      emit_phi_moves(code, blocks, block_id, instr->operand2.bb);
+      emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[1]].bb);
       emit_byte(code, 0xE9); // unconditional jump
-      emit_jump_placeholder(code, code->count, instr->operand2.bb);
+      emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[1]].bb);
       break;
     }
     case HIR_JUMP_IF_NOT: {
       // jump if conditional true to <A>
-      emit_stack_to_arg(code, 0, instr->operand3.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[2]);
       emit_cfun_call(code, janet_truthy);
       // compare
       emit_byte(code, 0x85);
@@ -2699,20 +2916,20 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       emit_u32(code, 0);
 
       // phis for if not case
-      emit_phi_moves(code, blocks, block_id, instr->operand1.bb);
+      emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[0]].bb);
       emit_byte(code, 0xE9); // unconditional jump
-      emit_jump_placeholder(code, code->count, instr->operand1.bb);
+      emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[0]].bb);
 
       edit_u32(code, internal_jump_pc, code->count - (internal_jump_pc + 4));
       // phis for conditional false destination <A>
-      emit_phi_moves(code, blocks, block_id, instr->operand2.bb);
+      emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[1]].bb);
       emit_byte(code, 0xE9); // unconditional jump
-      emit_jump_placeholder(code, code->count, instr->operand2.bb);
+      emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[1]].bb);
       break;
     }
     case HIR_JUMP_IF_NIL: {
       // jump if conditional true to <A>
-      emit_stack_to_arg(code, 0, instr->operand3.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[2]);
       emit_cfun_call(code, jit_nil);
       // compare
       emit_byte(code, 0x85);
@@ -2728,20 +2945,20 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       emit_u32(code, 0);
 
       // phis for if not case
-      emit_phi_moves(code, blocks, block_id, instr->operand1.bb);
+      emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[0]].bb);
       emit_byte(code, 0xE9); // unconditional jump
-      emit_jump_placeholder(code, code->count, instr->operand1.bb);
+      emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[0]].bb);
 
       edit_u32(code, internal_jump_pc, code->count - (internal_jump_pc + 4));
       // phis for conditional false destination <A>
-      emit_phi_moves(code, blocks, block_id, instr->operand2.bb);
+      emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[1]].bb);
       emit_byte(code, 0xE9); // unconditional jump
-      emit_jump_placeholder(code, code->count, instr->operand2.bb);
+      emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[1]].bb);
       break;
     }
     case HIR_JUMP_IF_NOT_NIL: {
       // jump if conditional true to <A>
-      emit_stack_to_arg(code, 0, instr->operand3.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[2]);
       emit_cfun_call(code, jit_nil);
       // compare
       emit_byte(code, 0x85);
@@ -2757,35 +2974,55 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       emit_u32(code, 0);
 
       // phis for if not case
-      emit_phi_moves(code, blocks, block_id, instr->operand1.bb);
+      emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[0]].bb);
       emit_byte(code, 0xE9); // unconditional jump
-      emit_jump_placeholder(code, code->count, instr->operand1.bb);
+      emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[0]].bb);
 
       edit_u32(code, internal_jump_pc, code->count - (internal_jump_pc + 4));
       // phis for conditional false destination <A>
-      emit_phi_moves(code, blocks, block_id, instr->operand2.bb);
+      emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[1]].bb);
       emit_byte(code, 0xE9); // unconditional jump
-      emit_jump_placeholder(code, code->count, instr->operand2.bb);
+      emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[1]].bb);
       break;
     }
     case HIR_GREATER_THAN: {
       emit_comparison(code,
-		      &instr->operand1,
-		      &instr->operand2,
+		      &blocks->vregs[instr->args[0]],
+		      &blocks->vregs[instr->args[1]],
 		      false,
 		      X86_CMOV_ABOVE,
 		      -1,
-		      instr->result.virtual_register);
+		      instr->result);
+      break;
+    }
+    case HIR_GREATER_THAN_IMM: {
+      emit_comparison(code,
+		      &blocks->vregs[instr->args[0]],
+		      &blocks->imms[instr->args[1]],
+		      false,
+		      X86_CMOV_ABOVE,
+		      -1,
+		      instr->result);
       break;
     }
     case HIR_LESS_THAN: {
       emit_comparison(code,
-		      &instr->operand1,
-		      &instr->operand2,
+		      &blocks->vregs[instr->args[0]],
+		      &blocks->vregs[instr->args[1]],
 		      true,
 		      X86_CMOV_ABOVE,
 		      -1,
-		      instr->result.virtual_register);
+		      instr->result);
+      break;
+    }
+    case HIR_LESS_THAN_IMM: {
+      emit_comparison(code,
+		      &blocks->vregs[instr->args[0]],
+		      &blocks->imms[instr->args[1]],
+		      true,
+		      X86_CMOV_ABOVE,
+		      -1,
+		      instr->result);
       break;
     }
     case HIR_EQUALS: {
@@ -2795,64 +3032,67 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       /* 		      false, */
       /* 		      X86_CMOV_EQUAL, */
       /* 		      false, */
-      /* 		      instr->result.virtual_register); */
+      /* 		      instr->result->virtual_register); */
       emit_binary_fallback(code, instr, jit_equals_fallback);
+      break;
+    }
+    case HIR_EQUALS_IMM: {
+      /* emit_comparison(code, */
+      /* 		      &instr->operand1, */
+      /* 		      &instr->operand2, */
+      /* 		      false, */
+      /* 		      X86_CMOV_EQUAL, */
+      /* 		      false, */
+      /* 		      instr->result->virtual_register); */
+      emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_equals_fallback);
       break;
     }
     case HIR_COMPARE: {
       emit_compare(code,
-		   &instr->operand1,
-		   &instr->operand2,
-		   instr->result.virtual_register);
+		   &blocks->vregs[instr->args[0]],
+		   &blocks->vregs[instr->args[1]],
+		   instr->result);
       break;
     }
     case HIR_LOAD: {
-      emit_imm_gpr(code, 0, operand_to_janet_bits(&instr->operand1));
-      emit_store_rax(code, instr->result.virtual_register);
+      emit_imm_gpr(code, 0, operand_to_janet_bits(&blocks->imms[instr->args[0]]));
+      emit_store_rax(code, instr->result);
       break;
     }
     case HIR_LOAD_ARG: {
-      emit_arg_to_stack(code, instr->operand1.immus, instr->result.virtual_register);
+      emit_arg_to_stack(code, blocks->imms[instr->args[0]].immus, instr->result);
       break;
     }
     case HIR_PUSH: {
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      int argc = 0;
-      if (instr->operand1.type == OPERAND_VIRTUAL_REGISTER) {
-	argc++;
-	emit_stack_to_arg(code, 1, instr->operand1.virtual_register);
-      }
-      if (instr->operand2.type == OPERAND_VIRTUAL_REGISTER) {
-	emit_stack_to_arg(code, 2, instr->operand2.virtual_register);
-	argc++;
-      }
-      if (instr->operand3.type == OPERAND_VIRTUAL_REGISTER) {
-	emit_stack_to_arg(code, 3, instr->operand3.virtual_register);
-	argc++;
-      }
-
-      switch (argc) {
-      case 1:
-	emit_cfun_call(code, jit_push);
-	break;
-      case 2:
-	emit_cfun_call(code, jit_push_2);
-	break;
-      case 3:
-	emit_cfun_call(code, jit_push_3);
-	break;
-      }
+      emit_stack_to_arg(code, 1, instr->args[0]);
+      emit_cfun_call(code, jit_push);
+      break;
+    }
+    case HIR_PUSH2: {
+      emit_non_janet_to_arg(code, 0, call_args_loc);
+      emit_stack_to_arg(code, 1, instr->args[0]);
+      emit_stack_to_arg(code, 2, instr->args[1]);
+      emit_cfun_call(code, jit_push_2);
+      break;
+    }
+    case HIR_PUSH3: {
+      emit_non_janet_to_arg(code, 0, call_args_loc);
+      emit_stack_to_arg(code, 1, instr->args[0]);
+      emit_stack_to_arg(code, 2, instr->args[1]);
+      emit_stack_to_arg(code, 3, instr->args[2]);
+      emit_cfun_call(code, jit_push_3);
       break;
     }
     case HIR_CALL: {
-      emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[0]);
       emit_non_janet_to_arg(code, 1, call_args_loc);
       emit_cfun_call(code, jit_call);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     }
     case HIR_TAIL_CALL: {
-      emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[0]);
       emit_non_janet_to_arg(code, 1, call_args_loc);
       emit_cfun_call(code, jit_call);
       if (stack_size > 0) {
@@ -2866,105 +3106,106 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_IN: {
-      emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
-      if (instr->operand2.type == OPERAND_VIRTUAL_REGISTER) {
-	emit_stack_to_arg(code, 1, instr->operand2.virtual_register);
-      } else {
-	emit_imm_to_arg(code, 1, instr->operand2.imms);
-      }
+      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_stack_to_arg(code, 1, instr->args[1]);
       emit_cfun_call(code, janet_in);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     }
     case HIR_GET: {
-      emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
-      if (instr->operand2.type == OPERAND_VIRTUAL_REGISTER) {
-	emit_stack_to_arg(code, 1, instr->operand2.virtual_register);
-	emit_cfun_call(code, janet_get);
-      } else {
-	emit_imm_to_arg(code, 1, instr->operand2.immus);
-	emit_cfun_call(code, janet_getindex);
-      }
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_stack_to_arg(code, 1, instr->args[1]);
+      emit_cfun_call(code, janet_get);
+      emit_store_ret(code, instr->result);
+      break;
+    }
+    case HIR_GET_INDEX: {
+      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_imm_to_arg(code, 1, blocks->imms[instr->args[1]].immus);
+      emit_cfun_call(code, janet_getindex);
+      emit_store_ret(code, instr->result);
       break;
     }
     case HIR_PUT: {
-      emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
-      if (instr->operand2.type == OPERAND_VIRTUAL_REGISTER) {
-	emit_stack_to_arg(code, 1, instr->operand2.virtual_register);
-      } else {
-	emit_imm_to_arg(code, 1, operand_to_janet_bits(&instr->operand2));
-      }
-      emit_stack_to_arg(code, 2, instr->operand3.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_stack_to_arg(code, 1, instr->args[1]);
+      emit_stack_to_arg(code, 2, instr->args[2]);
+      emit_cfun_call(code, janet_put);
+      break;
+    }
+    case HIR_PUT_INDEX: {
+      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_imm_to_arg(code, 1, operand_to_janet_bits(&blocks->imms[instr->args[1]]));
+      emit_stack_to_arg(code, 2, instr->args[2]);
       emit_cfun_call(code, janet_put);
       break;
     }
     case HIR_LENGTH: {
-      emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[0]);
       emit_cfun_call(code, janet_lengthv);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     }
     case HIR_MAKE_ARRAY:
       emit_non_janet_to_arg(code, 0, call_args_loc);
       emit_cfun_call(code, jit_make_array);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     case HIR_MAKE_TUPLE:
       emit_non_janet_to_arg(code, 0, call_args_loc);
       emit_cfun_call(code, jit_make_tuple);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     case HIR_MAKE_BRACKET_TUPLE:
       emit_non_janet_to_arg(code, 0, call_args_loc);
       emit_cfun_call(code, jit_make_bracket_tuple);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     case HIR_MAKE_BUFFER:
       emit_non_janet_to_arg(code, 0, call_args_loc);
       emit_cfun_call(code, jit_make_buffer);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     case HIR_MAKE_STRING:
       emit_non_janet_to_arg(code, 0, call_args_loc);
       emit_cfun_call(code, jit_make_string);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     case HIR_MAKE_STRUCT:
       emit_non_janet_to_arg(code, 0, call_args_loc);
       emit_cfun_call(code, jit_make_struct);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     case HIR_MAKE_TABLE:
       emit_non_janet_to_arg(code, 0, call_args_loc);
       emit_cfun_call(code, jit_make_table);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     case HIR_GREATER_THAN_EQUAL: {
       emit_comparison(code,
-		      &instr->operand1,
-		      &instr->operand2,
+		      &blocks->vregs[instr->args[0]],
+		      &blocks->vregs[instr->args[1]],
 		      false,
 		      X86_CMOV_ABOVE_EQUAL,
 		      -1,
-		      instr->result.virtual_register);
+		      instr->result);
       break;
     }
     case HIR_LESS_THAN_EQUAL: {
       emit_comparison(code,
-		      &instr->operand1,
-		      &instr->operand2,
+		      &blocks->vregs[instr->args[0]],
+		      &blocks->vregs[instr->args[1]],
 		      true,
 		      X86_CMOV_ABOVE_EQUAL,
 		      -1,
-		      instr->result.virtual_register);
+		      instr->result);
       break;
     }
     case HIR_NEXT: {
-      emit_stack_to_arg(code, 0, instr->operand1.virtual_register);
-      emit_stack_to_arg(code, 1, instr->operand2.virtual_register);
+      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_stack_to_arg(code, 1, instr->args[1]);
       emit_cfun_call(code, janet_next);
-      emit_store_ret(code, instr->result.virtual_register);
+      emit_store_ret(code, instr->result);
       break;
     }
     case HIR_NOT_EQUALS: {
@@ -2976,6 +3217,17 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       /* 		      true, */
       /* 		      instr->result.virtual_register); */
       emit_binary_fallback(code, instr, jit_not_equals_fallback);
+      break;
+    }
+    case HIR_NOT_EQUALS_IMM: {
+      /* emit_comparison(code, */
+      /* 		      &instr->operand1, */
+      /* 		      &instr->operand2, */
+      /* 		      false, */
+      /* 		      X86_CMOV_NOT_EQUAL, */
+      /* 		      true, */
+      /* 		      instr->result.virtual_register); */
+      emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_not_equals_fallback);
       break;
     }
     case HIR_PHI: {
@@ -2994,13 +3246,14 @@ static void compile(JittedFunction *jitted) {
     .capacity = 256,
     .data = malloc(256 * sizeof(uint8_t)),
     .jump_index = 0,
-    .jump_targets = malloc(256 * sizeof(uint32_t)),
-    .jump_locations = malloc(256 * sizeof(uint32_t)),
+    .jump_capacity = 256,
+    .jump_targets = malloc(256 * sizeof(size_t)),
+    .jump_locations = malloc(256 * sizeof(size_t)),
   };
 
   // stack size rounded to 16
   uint32_t stack_size =
-    ((jitted->method_blocks.virtual_register_count * sizeof(Janet) + sizeof(CallArgs*)) + 7u & ~15u) + 8u;
+    ((jitted->method_blocks.vreg_count * sizeof(Janet) + sizeof(CallArgs*)) + 7u & ~15u) + 8u;
 
   if (stack_size > 0) {
     emit_byte(&code, 0x48);             // REX.W: use 64-bit operands.
@@ -3053,6 +3306,37 @@ static void compile(JittedFunction *jitted) {
   free(code.jump_locations);
 }
 
+static void free_method_blocks(MethodBlocks *blocks) {
+  for (size_t block_i = 0; block_i < blocks->count; block_i++) {
+    BasicBlock *block = &blocks->blocks[block_i];
+
+    for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
+      free(block->instructions[instr_i].phi_sources);
+    }
+
+    free(block->instructions);
+    free(block->virtual_register_def);
+    free(block->virtual_register_last_use);
+    free(block->slot_map);
+    free(block->input_edges);
+    free(block->output_edges);
+    free(block->slot_use);
+    free(block->slot_def);
+    free(block->live_in);
+    free(block->live_out);
+  }
+
+  free(blocks->blocks);
+  free(blocks->block_start_pcs);
+  free(blocks->block_locations);
+  free(blocks->vregs);
+  free(blocks->imms);
+  free(blocks->bbs);
+  free(blocks->virtual_register_types);
+
+  *blocks = (MethodBlocks) {0};
+}
+
 static int jitted_function_gc(void *p, size_t size) {
   JittedFunction *jitted = p;
   (void)size;
@@ -3066,6 +3350,7 @@ static int jitted_function_gc(void *p, size_t size) {
   if (jitted->ca.capacity > 0) {
     free(jitted->ca.argv);
   }
+  free_method_blocks(&jitted->method_blocks);
   return 0;
 }
 
@@ -3107,9 +3392,12 @@ static Janet jitted_op_tuple(Operand *op) {
   case OPERAND_UNSIGNED_IMM:
     janet_op[1] = janet_wrap_number(op->immus);
     break;
-  case OPERAND_JANET_IMM:
-    janet_op[1] = janet_ckeywordv("TODO");
+  case OPERAND_JANET_IMM: {
+    Janet value;
+    value.u64 = op->immus;
+    janet_op[1] = value;
     break;
+  }
   case OPERAND_UNUSED:
     janet_op[1] = janet_ckeywordv("_");
     break;
@@ -3118,6 +3406,24 @@ static Janet jitted_op_tuple(Operand *op) {
     break;
   }
   return janet_wrap_tuple(janet_tuple_end(janet_op));
+}
+
+static Operand *instruction_arg(MethodBlocks *blocks,
+				Instruction *instr,
+				size_t arg_i) {
+  InstructionArgs args = instruction_args(instr->type);
+  uint8_t arg_mask = 1u << arg_i;
+
+  if (args.vregs & arg_mask) {
+    return &blocks->vregs[instr->args[arg_i]];
+  }
+  if (args.imms & arg_mask) {
+    return &blocks->imms[instr->args[arg_i]];
+  }
+  if (args.bbs & arg_mask) {
+    return &blocks->bbs[instr->args[arg_i]];
+  }
+  return &blocks->vregs[0];
 }
 
 static Janet jitted_janet_hir(JittedFunction *jitted) {
@@ -3129,20 +3435,24 @@ static Janet jitted_janet_hir(JittedFunction *jitted) {
     for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
       Instruction *instr = &block->instructions[instr_i];
       if (instr->type == HIR_PHI) {
-	JanetTable *janet_instr = janet_table(1 + instr->phi_source_count);
-	janet_table_put(janet_instr,  janet_ckeywordv("type"), janet_csymbolv(instruction_names[instr->type]));
+	JanetTable *janet_instr = janet_table(5 + instr->phi_source_count);
+	janet_table_put(janet_instr, janet_ckeywordv("type"), janet_ckeywordv(instruction_names[instr->type]));
+	janet_table_put(janet_instr, janet_ckeywordv("result"), jitted_op_tuple(&blocks->vregs[instr->result]));
+	janet_table_put(janet_instr, janet_ckeywordv("op1"), jitted_op_tuple(&blocks->vregs[0]));
+	janet_table_put(janet_instr, janet_ckeywordv("op2"), jitted_op_tuple(&blocks->vregs[0]));
+	janet_table_put(janet_instr, janet_ckeywordv("op3"), jitted_op_tuple(&blocks->vregs[0]));
 	for (size_t i = 0; i < instr->phi_source_count; i++) {
 	  PhiSource *source = &instr->phi_sources[i];
-	  janet_table_put(janet_instr,  janet_wrap_number(source->bb), janet_wrap_number(source->virtual_register));
+	  janet_table_put(janet_instr, janet_wrap_number(source->bb), jitted_op_tuple(&blocks->vregs[source->virtual_register]));
 	}
 	janet_bb_instrs[instr_i] = janet_wrap_struct(janet_table_to_struct(janet_instr));
       } else {
 	JanetTable *janet_instr = janet_table(5);
-	janet_table_put(janet_instr,  janet_ckeywordv("type"), janet_ckeywordv(instruction_names[instr->type]));
-	janet_table_put(janet_instr,  janet_ckeywordv("result"), jitted_op_tuple(&instr->result));
-	janet_table_put(janet_instr,  janet_ckeywordv("op1"), jitted_op_tuple(&instr->operand1));
-	janet_table_put(janet_instr,  janet_ckeywordv("op2"), jitted_op_tuple(&instr->operand2));
-	janet_table_put(janet_instr,  janet_ckeywordv("op3"), jitted_op_tuple(&instr->operand3));
+	janet_table_put(janet_instr, janet_ckeywordv("type"), janet_ckeywordv(instruction_names[instr->type]));
+	janet_table_put(janet_instr, janet_ckeywordv("result"), jitted_op_tuple(&blocks->vregs[instr->result]));
+	janet_table_put(janet_instr, janet_ckeywordv("op1"), jitted_op_tuple(instruction_arg(blocks, instr, 0)));
+	janet_table_put(janet_instr, janet_ckeywordv("op2"), jitted_op_tuple(instruction_arg(blocks, instr, 1)));
+	janet_table_put(janet_instr, janet_ckeywordv("op3"), jitted_op_tuple(instruction_arg(blocks, instr, 2)));
 	janet_bb_instrs[instr_i] = janet_wrap_struct(janet_table_to_struct(janet_instr));
       }
     }
@@ -3223,7 +3533,7 @@ static Janet jit_jitable(int32_t argc, Janet *argv) {
   if (strcmp(mismatch_action, "fallback") == 0) {
     jitted->mismatch_behavior = MISMATCH_FALLBACK;
   } else if (strcmp(mismatch_action, "error") == 0) {
-    jitted->mismatch_behavior = MISMATCH_FALLBACK;
+    jitted->mismatch_behavior = MISMATCH_ERROR;
   } else if (strcmp(mismatch_action, "recompile") == 0) {
     jitted->mismatch_behavior = MISMATCH_RECOMPILE;
   }

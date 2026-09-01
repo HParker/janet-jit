@@ -3,7 +3,7 @@
 (defn jit-perf-cmp [loops f & args]
   (def warmup-itterations 100)
   (def itterations loops)
-  (def jit-f (jit/jitable f))
+  (def jit-f (jit/jitable f :error))
 
   (repeat warmup-itterations
     (jit-f ;args))
