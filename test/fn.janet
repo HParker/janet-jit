@@ -143,6 +143,19 @@
       (++ pass-count)))
 (print pass-count " copy-deep-not= passed")
 
+(if (jit-result-matches (fn [x] (type x) (type x)) 42)
+  (print ". double cfunction call pass"))
+
+(defn self-reentrant-fact [n rec] (if (< n 2) 1 (* n (rec (- n 1) rec))))
+(def self-reentrant-fact-jit (jit/jitable self-reentrant-fact :error))
+(let [expected (self-reentrant-fact 5 self-reentrant-fact)
+      actual (self-reentrant-fact-jit 5 self-reentrant-fact-jit)]
+  (if (not (jit/compiled? self-reentrant-fact-jit))
+    (error "self-reentrant-fact did not compile"))
+  (if (= expected actual)
+    (print ". self-reentrancy pass")
+    (print "x self-reentrancy expected " expected " actual " actual)))
+
 # Tiny tests too small to name
 (def tests
   [(fn [x] x)
