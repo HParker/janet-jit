@@ -24,7 +24,7 @@
 (import /build/jit :as jit)
 
 (defn jit-result-deep-matches [f & args]
-  (let [jit-f (jit/jitable f)]
+  (let [jit-f (jit/jitable f :error)]
     (let [expected (f ;args)
 	  actual (jit-f ;args)]
       (do
@@ -39,7 +39,7 @@
 	    false))))))
 
 (defn jit-result-matches [f & args]
-  (let [jit-f (jit/jitable f)]
+  (let [jit-f (jit/jitable f :error)]
     (let [expected (f ;args)
 	  actual (jit-f ;args)]
       (do
