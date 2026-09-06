@@ -1,8 +1,7 @@
 # (jit/jitable (fn []))
 
 Small single file callable Jit for the janet programming language. You tell the jit what functions to compile
-and it compiles them on next call. The jit makes a huge number of
-assumptions, so the jit is not the right choice in all cases.
+and it compiles them on next call.
 
 Right now it only target System V x86 with nanboxed janet values. I
 would love to support ARM and Janet without nanboxed, but haven't
@@ -17,9 +16,65 @@ done so yet.
 (lerp-jit 1 20 0.3) # call just like usual, but will compile to binary on first call.
 ```
 
+## API
+
+### `(jit/jitable function &opt fallback-behavior)`
+
+```janet
+(jit/jitable (fn [x] (* x x)))
+```
+
+returns an abstract type which when called will first compile then run a version of the function you supplied.
+
+#### Optional arguments
+
+`jit/jitable` takes a optional argument specifying what to do if the argument types do not match the recorded signature. Valid options are:
+
+| option    | behavior                                                                                                                                                                                         |
+|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| :error    | panic if different argument types are passed. This is useful if you want to assure your jitted functions are always called monomorphicly, but probably not a good option outside of dev and test |
+| :fallback | When the signature does not match call the Janet function that was provided. This is a reasonable default if you want make one case fast, but not break everything else.                         |
+
+
+### `(jit/compiled? jit-fn)`
+
+Returns if a jitted function was compiled. Useful for knowing if you are seeing JIT behavior or pre-compiled behavior.
+
+### `(get jit-fn :hir)`
+
+Returns the High level Intermediate representation (HIR) of your program. Useful for debugging code generation and optimizing JIT behavior.
+
+```janet
+(defn my-fib [n] (if (< n 2) n (+ (my-fib (- n 1)) (my-fib (- n 2)))))
+(def fib-jit (jit/jitable my-fib))
+(pp (get fib-jit :hir))
+# => (({:args ((:immus 0) (:unused :_) (:unused :_)) :result (:vreg 1) :type :load-arg} {:args ((:jimm <function my-fib>) (:unused :_) (:unused :_)) :result (:vreg 2) :type :load} {:args ((:vreg 1) (:imms 2) (:unused :_)) :result (:vreg 3) :type :lti} {:args ((:bb 2) (:bb 1) (:vreg 3)) :result (:unused :_) :type :jump-if-not}) ({:args ((:vreg 1) (:unused :_) (:unused :_)) :result (:unused :_) :type :ret}) ({:args ((:vreg 1) (:imms 1) (:unused :_)) :result (:vreg 4) :type :subi} {:args ((:vreg 4) (:unused :_) (:unused :_)) :result (:unused :_) :type :push} {:args ((:vreg 2) (:unused :_) (:unused :_)) :result (:vreg 5) :type :call} {:args ((:vreg 1) (:imms 2) (:unused :_)) :result (:vreg 6) :type :subi} {:args ((:vreg 6) (:unused :_) (:unused :_)) :result (:unused :_) :type :push} {:args ((:vreg 2) (:unused :_) (:unused :_)) :result (:vreg 7) :type :call} {:args ((:vreg 5) (:vreg 7) (:unused :_)) :result (:vreg 8) :type :add} {:args ((:vreg 8) (:unused :_) (:unused :_)) :result (:unused :_) :type :ret}))
+```
+
+there is a pretty printer in test/hir-debug.janet that will turn that output into:
+
+```
+---- basic block 0 -----
+v1 = load-arg(0u)
+v2 = load(<function my-fib>)
+v3 = lti(v1, 2i)
+_ = jump-if-not(bb2, bb1, v3)
+---- basic block 1 -----
+_ = ret(v1)
+---- basic block 2 -----
+v4 = subi(v1, 1i)
+_ = push(v4)
+v5 = call(v2)
+v6 = subi(v1, 2i)
+_ = push(v6)
+v7 = call(v2)
+v8 = add(v5, v7)
+_ = ret(v8)
+```
+
 ## Project Status
 
-experimental / educational
+experimental / educational : Please report segfaults, behavior mismatches and performance regressions.
 
 ## Setup
 
@@ -31,6 +86,8 @@ experimental / educational
 (declare-project :name "my project")
 (declare-native :name "jit" :source @["jit.c"])
 ```
+
+## Contributing
 
 You can then build it with,
 
@@ -45,7 +102,6 @@ janet test/test-asm.janet
 janet test/test-fns.janet
 ```
 
-
 ## Performance
 
 ```
@@ -53,39 +109,30 @@ $ jpm build && janet benchmarks/microbench.janet
 ```
 
 ---------------------------------------------------------------------------------------
-| name                               | interpreter ips   | interpreter elapsed | jit ips           | jit elapsed     | times faster |
-|------------------------------------|-------------------|---------------------|-------------------|-----------------|--------------|
-| 10 mul                             | 20329661.0839 ips | 4.9189 ellapsed     | 53346752.0759 ips | 1.8745 ellapsed | 2.62x faster |
-| len (tuple)                        | 31750088.3389 ips | 3.1496 ellapsed     | 47266664.9534 ips | 2.1157 ellapsed | 1.49x faster |
-| len (string)                       | 30390680.9501 ips | 3.2905 ellapsed     | 39894507.6078 ips | 2.5066 ellapsed | 1.31x faster |
-| len (buffer)                       | 32874418.5158 ips | 3.0419 ellapsed     | 46192819.5047 ips | 2.1648 ellapsed | 1.41x faster |
-| get (tuple & number)               | 32391191.0890 ips | 3.0873 ellapsed     | 43673945.0947 ips | 2.2897 ellapsed | 1.35x faster |
-| get (tuple & number)               | 32509071.9792 ips | 3.0761 ellapsed     | 43605404.6743 ips | 2.2933 ellapsed | 1.34x faster |
-| lerp                               | 29152278.9848 ips | 0.3430 ellapsed     | 50142773.0225 ips | 0.1994 ellapsed | 1.72x faster |
-| fade                               | 15085604.2494 ips | 0.6629 ellapsed     | 47844517.8715 ips | 0.2090 ellapsed | 3.17x faster |
-| dot                                | 26305710.7870 ips | 0.3801 ellapsed     | 51561939.5372 ips | 0.1939 ellapsed | 1.96x faster |
-| bubble sort                        | 571.2923 ips      | 1.7504 ellapsed     | 560.3170 ips      | 1.7847 ellapsed | 0.98x faster |
-| perlin gradients                   | 92158.3297 ips    | 1.0851 ellapsed     | 116208.7656 ips   | 0.8605 ellapsed | 1.26x faster |
-| in                                 | 26507896.1734 ips | 0.3772 ellapsed     | 44973588.6973 ips | 0.2224 ellapsed | 1.70x faster |
-| get                                | 26232817.6257 ips | 0.3812 ellapsed     | 42276238.7709 ips | 0.2365 ellapsed | 1.61x faster |
-| call                               | 28975552.1708 ips | 0.3451 ellapsed     | 22824946.6396 ips | 0.4381 ellapsed | 0.79x faster |
-| C call                             | 20711345.7506 ips | 0.4828 ellapsed     | 27138547.3866 ips | 0.3685 ellapsed | 1.31x faster |
-| call jit                           | 27409171.6244 ips | 0.0365 ellapsed     | 33036918.3925 ips | 0.0303 ellapsed | 1.21x faster |
-| deep-not= (true)                   | 1560792.7365 ips  | 0.0641 ellapsed     | 1603911.3109 ips  | 0.0623 ellapsed | 1.03x faster |
-| deep-not= (false type difference)  | 1793042.2575 ips  | 0.0558 ellapsed     | 1845113.2592 ips  | 0.0542 ellapsed | 1.03x faster |
-| deep-not= (false value difference) | 1612397.1930 ips  | 0.0620 ellapsed     | 1657832.2993 ips  | 0.0603 ellapsed | 1.03x faster |
-| deep-not= (deep array)             | 216008.1660 ips   | 0.4629 ellapsed     | 218708.1494 ips   | 0.4572 ellapsed | 1.01x faster |
-| deep-not= (deep table)             | 211008.2538 ips   | 0.4739 ellapsed     | 224888.4067 ips   | 0.4447 ellapsed | 1.07x faster |
-| cmp (numeric)                      | 29822908.7644 ips | 0.3353 ellapsed     | 45275688.5796 ips | 0.2209 ellapsed | 1.52x faster |
-| cmp (type difference)              | 30166166.3149 ips | 0.3315 ellapsed     | 38826019.9633 ips | 0.2576 ellapsed | 1.29x faster |
-| cmp (not numeric)                  | 24058534.2181 ips | 0.0416 ellapsed     | 27807994.2534 ips | 0.0360 ellapsed | 1.16x faster |
-
+| name                  | interpreter ips   | interpreter elapsed | jit ips           | jit elapsed     | times faster |
+|-----------------------|-------------------|---------------------|-------------------|-----------------|--------------|
+| fib                   | 133.8781 ips      | 7.4695 ellapsed     | 248.2442 ips      | 4.0283 ellapsed | 1.85x faster |
+| 10 mul                | 22031517.0047 ips | 4.5390 ellapsed     | 51974349.7811 ips | 1.9240 ellapsed | 2.36x faster |
+| len (tuple)           | 32352740.9406 ips | 3.0909 ellapsed     | 47378685.5751 ips | 2.1107 ellapsed | 1.46x faster |
+| get (tuple & number)  | 30408868.5913 ips | 3.2885 ellapsed     | 43722734.9833 ips | 2.2871 ellapsed | 1.44x faster |
+| lerp                  | 27538952.0302 ips | 0.3631 ellapsed     | 44019993.3000 ips | 0.2272 ellapsed | 1.60x faster |
+| fade                  | 15102558.2411 ips | 0.6621 ellapsed     | 42252826.9305 ips | 0.2367 ellapsed | 2.80x faster |
+| dot                   | 26314413.4375 ips | 0.3800 ellapsed     | 42530503.1858 ips | 0.2351 ellapsed | 1.62x faster |
+| bubble sort           | 602.0981 ips      | 1.6609 ellapsed     | 608.0222 ips      | 1.6447 ellapsed | 1.01x faster |
+| perlin gradients      | 89155.1173 ips    | 1.1216 ellapsed     | 117511.0833 ips   | 0.8510 ellapsed | 1.32x faster |
+| in                    | 25656890.1517 ips | 0.3898 ellapsed     | 42126377.2528 ips | 0.2374 ellapsed | 1.64x faster |
+| get                   | 26572971.5030 ips | 0.3763 ellapsed     | 43025828.7535 ips | 0.2324 ellapsed | 1.62x faster |
+| call                  | 25661979.3710 ips | 0.3897 ellapsed     | 21168456.9973 ips | 0.4724 ellapsed | 0.82x faster |
+| C call                | 21760819.3959 ips | 0.4595 ellapsed     | 29688328.8660 ips | 0.3368 ellapsed | 1.36x faster |
+| call jit              | 27227228.8372 ips | 0.0367 ellapsed     | 32638293.2601 ips | 0.0306 ellapsed | 1.20x faster |
+| deep-not= (false)     | 1564670.8341 ips  | 0.0639 ellapsed     | 1575417.5624 ips  | 0.0635 ellapsed | 1.01x faster |
+| cmp (numeric)         | 29406045.8350 ips | 0.3401 ellapsed     | 46887159.1591 ips | 0.2133 ellapsed | 1.59x faster |
+| cmp (type difference) | 29880584.2176 ips | 0.3347 ellapsed     | 36833424.8658 ips | 0.2715 ellapsed | 1.23x faster |
+| cmp (not numeric)     | 24846590.9369 ips | 0.0402 ellapsed     | 29050851.4501 ips | 0.0344 ellapsed | 1.17x faster |
 
 ## Notable Differences from Janet interpreter
 
-Jit generated code has less strict garantees about correctness and errors than the interpreter. It expects that you to pass it correct numeric focused code.
-
-Defining your own operators is supported, but will likely not perform better than the interpreter
+Defining your own operators is supported, but will likely not perform better than the interpreter:
 
 ```janet
 (def addable
@@ -99,14 +146,14 @@ works, but will end up doing nearly the same work as in the interpreter.
 
 There are also a number of operations the VM can do that the JIT today does not support. They mostly have to do with VM state and probably make bad candidates for the JIT anyways. Today the list of unsupported ops is:
 
-- (ldu) load up value
-- (setu) set up value
-- (res) resume
-- (sig) signal
-- (prop) propagate
-- (clo) closure
+- `(ldu)` load up value
+- `(setu)` set up value
+- `(res)` resume
+- `(sig)` signal
+- `(prop)` propagate
+- `(clo)` closure
 
-Operations that always fall back to the interpreter:
+Operations that always call into the interpreter:
 
 - push
 - type check
@@ -127,7 +174,7 @@ Operations that always fall back to the interpreter:
 
 Using these operators can slow down jitted functions, but should work as expected.
 
-All other operations can also fall back to the VM when runtime type information isn't provable. I want to add information about when these cases are compiled, but haven't added that yet.
+All other operations can also fall back to the VM when runtime type information isn't provable.
 
 ## Other things
 

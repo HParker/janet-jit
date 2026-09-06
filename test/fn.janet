@@ -1,7 +1,7 @@
 (import /build/jit :as jit)
 
-(defn jit-result-deep-matches [f & args]
-  (let [jit-f (jit/jitable f :error)]
+(defn jit-result-deep-matches [f mode & args]
+  (let [jit-f (jit/jitable f mode)]
     (let [expected (f ;args)
 	  actual (jit-f ;args)]
       (do
@@ -114,7 +114,7 @@
             (forv i 0 (length x)
               (def xx (in x i))
               (def yy (in y i))
-              (if (deep-not= xx yy)
+              (if (copy-deep-not= xx yy)
                 (break (set ret true))))
             ret))
       (or (= tx :struct) (= tx :table))
@@ -123,7 +123,7 @@
             (def rawget (if (= tx :struct) struct/rawget table/rawget))
             (var ret false)
             (eachp [k v] x
-              (if (deep-not= (rawget y k) v) (break (set ret true))))
+              (if (copy-deep-not= (rawget y k) v) (break (set ret true))))
             ret))
       (= tx :buffer) (not= 0 (- (length x) (length y)) (memcmp x y))
       (not= x y))))
@@ -139,7 +139,7 @@
 
 (var pass-count 0)
 (each [lhs rhs] deep-not-eq-tests
-    (if (jit-result-deep-matches copy-deep-not= lhs rhs)
+    (if (jit-result-deep-matches copy-deep-not= :fallback lhs rhs)
       (++ pass-count)))
 (print pass-count " copy-deep-not= passed")
 
@@ -254,7 +254,7 @@
 (var pass-count 0)
 (each bn number-ints
   (each t deep-equality-tests
-    (if (jit-result-deep-matches t bn bn)
+    (if (jit-result-deep-matches t :error bn bn)
       (++ pass-count))))
 (print pass-count " deep equality passed")
 

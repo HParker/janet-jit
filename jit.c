@@ -630,7 +630,8 @@ static size_t new_jimm(MethodBlocks *blocks, Janet val) {
   return index;
 }
 
-static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t block_id, uint32_t *parent_slot_map) {
+static void compile_bb_bytecode(JittedFunction *jitted, JanetFunction *fn, size_t block_id, uint32_t *parent_slot_map) {
+  MethodBlocks *blocks = &jitted->method_blocks;
   JanetFuncDef *def = fn->def;
 
   // keep my own copy of slot_map to avoid changing the owners copy
@@ -884,7 +885,7 @@ static void compile_bb_bytecode(MethodBlocks *blocks, JanetFunction *fn, size_t 
     }
     case JOP_LOAD_SELF: {
       Instruction *instruction = add_instruction(blocks, block_id, HIR_LOAD);
-      instruction->args[0] = new_jimm(blocks, janet_wrap_function(fn));
+      instruction->args[0] = new_jimm(blocks, janet_wrap_abstract(jitted));
       instruction->result = new_vreg(blocks);
       slot_map[AA] = instruction->result;
       break;
@@ -1251,7 +1252,8 @@ static void replace_virtual_register(MethodBlocks *blocks,
 #undef VREG_ARG1
 #undef VREG_ARG2
 
-void build_basic_blocks(MethodBlocks *blocks, JanetFunction *fn) {
+void build_basic_blocks(JittedFunction *jitted, JanetFunction *fn) {
+  MethodBlocks *blocks = &jitted->method_blocks;
   // mark leaders
   bool *leaders = calloc(fn->def->bytecode_length, sizeof(bool));
   leaders[0] = true;
@@ -1491,7 +1493,7 @@ void build_basic_blocks(MethodBlocks *blocks, JanetFunction *fn) {
   rpo_order(blocks, 0, visited, list, &count);
 
   while (count > 0) {
-    compile_bb_bytecode(blocks, fn, list[--count], slot_map);
+    compile_bb_bytecode(jitted, fn, list[--count], slot_map);
   }
   free(slot_map);
   free(list);
@@ -4149,7 +4151,7 @@ static Janet jit_jitable(int32_t argc, Janet *argv) {
   jitted->signature_argc = fn->def->min_arity;
   jitted->signature_arg_types = NULL;
   setup_method_blocks(&jitted->method_blocks, fn->def->bytecode_length);
-  build_basic_blocks(&jitted->method_blocks, fn);
+  build_basic_blocks(jitted, fn);
 
   return janet_wrap_abstract(jitted);
 }
