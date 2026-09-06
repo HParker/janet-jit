@@ -14,8 +14,6 @@
 
 typedef struct BasicBlock BasicBlock;
 
-#define ENABLE_REGISTER_ALLOCATOR false
-
 typedef enum {
   OPERAND_UNUSED,
   OPERAND_UNDEFINED,
@@ -44,6 +42,16 @@ typedef struct {
   size_t slot;
 } PhiSource;
 
+
+typedef struct {
+  bool on_stack;
+  size_t reg;
+  // This always matches the vreg number, but can be made smaller.
+  // It only needs to be as high as the top we can get to with
+  // our registers allocated.
+  size_t stack_offset;
+} PhysicalLocation;
+
 typedef struct {
   OperandType type;
   union {
@@ -52,7 +60,7 @@ typedef struct {
     uint64_t immus;
     int64_t imms;
   };
-  size_t physical_register;
+  PhysicalLocation physical_location;
 } Operand;
 
 typedef enum {
@@ -272,6 +280,7 @@ size_t jop_to_hir[] = {
 };
 
 typedef struct {
+  size_t id;
   InstructionType type;
   size_t result;
   size_t args[3];
@@ -337,6 +346,8 @@ typedef struct {
 
   // TODO: move the type info onto the operand itself
   uint32_t *virtual_register_types;
+  uint32_t *vreg_defs;
+  uint32_t *vreg_last_uses;
 } MethodBlocks;
 
 typedef struct {
@@ -558,7 +569,7 @@ static size_t new_vreg(MethodBlocks *blocks) {
   blocks->vregs[index] = (Operand) {
     .type = OPERAND_VIRTUAL_REGISTER,
     .virtual_register = index,
-    .physical_register = 0
+    .physical_location = {false, 0}
   };
   return index;
 }
@@ -1090,6 +1101,8 @@ typedef struct {
   uint8_t bbs;
 } InstructionArgs;
 
+// TODO: all usage of this can be replaced with vreg_count
+// for each instruction type
 static InstructionArgs instruction_args(InstructionType type) {
   switch (type) {
   case HIR_ERROR:
@@ -1728,51 +1741,161 @@ void type_flow(MethodBlocks *blocks, int32_t argc, Janet *argv) {
   }
 }
 
-void block_local_register_allocate(MethodBlocks *blocks) {
+// I don't know how bad this is,
+// but for now I am using a instruction_location based on the
+// number of instructions since the start of the first basic block
+// This assumes that basic blocks are output in the order they are received
+// I think this is a fine assumption for now.
+static bool instruction_defines_vreg(InstructionType type) {
+  switch (type) {
+  case HIR_NOOP:
+  case HIR_ERROR:
+  case HIR_TYPECHECK:
+  case HIR_RETURN:
+  case HIR_RETURN_NIL:
+  case HIR_JUMP:
+  case HIR_JUMP_IF:
+  case HIR_JUMP_IF_NOT:
+  case HIR_JUMP_IF_NIL:
+  case HIR_JUMP_IF_NOT_NIL:
+  case HIR_PUSH:
+  case HIR_PUSH2:
+  case HIR_PUSH3:
+  case HIR_TAIL_CALL:
+  case HIR_PUT:
+  case HIR_PUT_INDEX:
+    return false;
+  default:
+    return true;
+  }
+}
+
+static void register_allocate(MethodBlocks *blocks) {
   // make our live ranges
-  uint32_t *vreg_births = calloc(blocks->vreg_count, sizeof(uint32_t));
-  uint32_t *vreg_deaths = calloc(blocks->vreg_count, sizeof(uint32_t));
+  uint32_t *vreg_defs = calloc(blocks->vreg_count, sizeof(uint32_t));
+  uint32_t *vreg_last_uses = calloc(blocks->vreg_count, sizeof(uint32_t));
+  bool *vreg_defined = calloc(blocks->vreg_count, sizeof(bool));
+  size_t instruction_location = 0;
+
   for (size_t block_i = 0; block_i < blocks->count; block_i++) {
     BasicBlock *block = &blocks->blocks[block_i];
+    for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
+      block->instructions[instr_i].id = instruction_location++;
+    }
+  }
 
-
+  for (size_t block_i = 0; block_i < blocks->count; block_i++) {
+    BasicBlock *block = &blocks->blocks[block_i];
     for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
       Instruction *instr = &block->instructions[instr_i];
-      vreg_births[instr->result] = instr_i;
-      vreg_deaths[instr->result] = instr_i;
+      instruction_location = instr->id;
+      if (instruction_defines_vreg(instr->type)) {
+        vreg_defs[instr->result] = instruction_location;
+        vreg_last_uses[instr->result] = instruction_location;
+        vreg_defined[instr->result] = true;
+      }
 
-      uint8_t vreg_args = instruction_vreg_args(instr->type);
-      for (size_t arg_i = 0; arg_i < 3; arg_i++) {
-        if ((vreg_args & (1u << arg_i))) {
-	  size_t vreg = instr->args[arg_i];
-	  vreg_deaths[vreg] = instr_i;
+      if (instr->type == HIR_PHI) {
+	for (size_t source_i = 0; source_i < instr->phi_source_count; source_i++) {
+          PhiSource *source = &instr->phi_sources[source_i];
+	  size_t vreg = source->virtual_register;
+          BasicBlock *source_block = &blocks->blocks[source->bb];
+          size_t use_location =
+            source_block->instructions[source_block->count - 1].id;
+	  if (vreg_last_uses[vreg] < use_location) {
+            vreg_last_uses[vreg] = use_location;
+          }
+	}
+      } else {
+	uint8_t vreg_args = instruction_vreg_args(instr->type);
+	for (size_t arg_i = 0; arg_i < 3; arg_i++) {
+	  if ((vreg_args & (1u << arg_i))) {
+	    size_t vreg = instr->args[arg_i];
+	    if (vreg_last_uses[vreg] < instruction_location) {
+              vreg_last_uses[vreg] = instruction_location;
+            }
+	  }
+	}
+      }
+    }
+  }
+
+  // A value defined before a loop header can be used again after a backedge,
+  // even when all of its linear uses appear earlier than the backedge source.
+  // Keep those values live through the source block to prevent reuse on the
+  // next loop iteration.
+  for (size_t block_i = 0; block_i < blocks->count; block_i++) {
+    BasicBlock *source_block = &blocks->blocks[block_i];
+    if (source_block->count == 0) {
+      continue;
+    }
+
+    size_t source_location =
+      source_block->instructions[source_block->count - 1].id;
+    for (size_t edge_i = 0; edge_i < source_block->output_edge_count; edge_i++) {
+      BasicBlock *target_block =
+        &blocks->blocks[source_block->output_edges[edge_i].basic_block_id];
+      if (target_block->count == 0) {
+        continue;
+      }
+
+      size_t target_location = target_block->instructions[0].id;
+      if (target_location > source_location) {
+        continue;
+      }
+
+      for (size_t vreg_i = 0; vreg_i < blocks->vreg_count; vreg_i++) {
+        if (vreg_defined[vreg_i] &&
+            vreg_defs[vreg_i] < target_location &&
+            vreg_last_uses[vreg_i] < source_location) {
+          vreg_last_uses[vreg_i] = source_location;
         }
       }
     }
+  }
 
-    size_t available_registers = 8;
-    bool register_free[] = { true, true, true, true, true, true, true, true };
+  // fallback to stack unless we give it a register
+  for (size_t vreg_i = 0; vreg_i < blocks->vreg_count; vreg_i++) {
+    blocks->vregs[vreg_i].physical_location.on_stack = true;
+    blocks->vregs[vreg_i].physical_location.stack_offset = vreg_i;
+  }
 
+  // allocate 8 registers (for now)
+  // and spill everything else
+  // for now codegen will assume all registers are volatile.
+  size_t available_registers = 2; // 8;
+  bool register_free[] = { true, true, true, true, true, true, true, true };
+  instruction_location = 0;
+
+  for (size_t block_i = 0; block_i < blocks->count; block_i++) {
+    BasicBlock *block = &blocks->blocks[block_i];
     for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
-      /* printf("%zu. ", instr_i); */
+      instruction_location = block->instructions[instr_i].id;
+      /* printf("%zu. ", instruction_location); */
       for (size_t vreg_i = 0; vreg_i < blocks->vreg_count; vreg_i++) {
-	if (instr_i == vreg_deaths[vreg_i]) {
-	  register_free[blocks->vregs[vreg_i].physical_register - 3] = true;
+	if (vreg_defined[vreg_i] &&
+            instruction_location == vreg_last_uses[vreg_i] &&
+            blocks->vregs[vreg_i].physical_location.on_stack == false) {
+	  register_free[blocks->vregs[vreg_i].physical_location.reg - 3] = true;
 	}
-
-	if (instr_i == vreg_births[vreg_i]) {
-	  if (blocks->vregs[vreg_i].physical_register == 0) {
+	if (vreg_defined[vreg_i] &&
+            vreg_defs[vreg_i] < vreg_last_uses[vreg_i] &&
+            instruction_location == vreg_defs[vreg_i]) {
+	  if (blocks->vregs[vreg_i].physical_location.on_stack) {
 	    for (size_t i = 0; i < available_registers; i++) {
 	      if (register_free[i]) {
 		register_free[i] = false;
-		blocks->vregs[vreg_i].physical_register = i + 3;
+		blocks->vregs[vreg_i].physical_location.on_stack = false;
+		blocks->vregs[vreg_i].physical_location.reg = i + 3;
 		i = available_registers;
 	      }
 	    }
 	  }
 	}
 
-	/* if (instr_i >= vreg_births[vreg_i] && instr_i <= vreg_deaths[vreg_i]) { */
+	/* if (vreg_defined[vreg_i] && */
+        /*     instruction_location >= vreg_defs[vreg_i] && */
+        /*     instruction_location <= vreg_last_uses[vreg_i]) { */
 	/*   printf("V%zu, ", vreg_i); */
 	/* } */
       }
@@ -1780,8 +1903,10 @@ void block_local_register_allocate(MethodBlocks *blocks) {
     }
 
   }
-  free(vreg_births);
-  free(vreg_deaths);
+
+  blocks->vreg_defs = vreg_defs;
+  blocks->vreg_last_uses = vreg_last_uses;
+  free(vreg_defined);
 }
 
 
@@ -1900,7 +2025,12 @@ void print_vreg_types(MethodBlocks *blocks, size_t vreg) {
 void print_ops(MethodBlocks *blocks, Operand *op) {
   switch (op->type) {
   case OPERAND_VIRTUAL_REGISTER:
-    printf("v%zu[P%zu] ", op->virtual_register, op->physical_register);
+    printf("v%zu", op->virtual_register);
+    if (op->physical_location.on_stack) {
+      printf("[s%zu] ", op->physical_location.stack_offset);
+    } else {
+      printf("[r%zu] ", op->physical_location.reg);
+    }
     print_vreg_types(blocks, op->virtual_register);
     break;
   case OPERAND_BASIC_BLOCK:
@@ -2348,7 +2478,7 @@ void emit_arg_to_xmm(CodeBuffer *code, uint32_t arg_num, uint32_t xmm_num) {
   emit_byte(code, 0x0F);
   emit_byte(code, 0x10);
   emit_byte(code, 0x87 | ((xmm_num & 7) << 3));
-  emit_u32(code, arg_num);
+  emit_u32(code, arg_num * sizeof(Janet));
 }
 
 void emit_arg_to_stack(CodeBuffer *code, uint32_t arg_num, uint32_t stack_num) {
@@ -2393,6 +2523,16 @@ static void emit_stack_to_rax(CodeBuffer *code, uint32_t source) {
   emit_u32(code, source * sizeof(Janet));
 }
 
+static void emit_stack_to_gpr_bits(CodeBuffer *code,
+                                   uint32_t dest,
+                                   uint32_t source) {
+  emit_byte(code, 0x48 | ((dest & 8) ? 0x04 : 0));
+  emit_byte(code, 0x8B);
+  emit_byte(code, 0x84 + ((dest & 7) << 3));
+  emit_byte(code, 0x24);
+  emit_u32(code, source * sizeof(Janet));
+}
+
 static void emit_stack_to_gpr(CodeBuffer *code, uint32_t dest, uint32_t source) {
   emit_byte(code, 0xF2);
   emit_byte(code, 0x48 | ((dest & 8) ? 0x04 : 0));
@@ -2401,6 +2541,20 @@ static void emit_stack_to_gpr(CodeBuffer *code, uint32_t dest, uint32_t source) 
   emit_byte(code, 0x84 + ((dest & 7) << 3)); // store here
   emit_byte(code, 0x24);
   emit_u32(code, source * sizeof(Janet)); // from here
+}
+
+static void emit_xmm_to_integer_gpr(CodeBuffer *code,
+                                    uint32_t destination,
+                                    uint32_t source) {
+  emit_byte(code, 0xF2);
+  emit_byte(code, 0x48 |
+            ((destination & 8) ? 0x04 : 0) |
+            ((source & 8) ? 0x01 : 0));
+  emit_byte(code, 0x0F);
+  emit_byte(code, 0x2C);
+  emit_byte(code, 0xC0 |
+            ((destination & 7) << 3) |
+            (source & 7));
 }
 
 
@@ -2422,6 +2576,18 @@ static void emit_gpr_to_xmm(CodeBuffer *code, uint32_t destination, uint32_t sou
 	    (source & 7));
 }
 
+static void emit_xmm_to_gpr(CodeBuffer *code, uint32_t destination, uint32_t source) {
+  emit_byte(code, 0x66);
+  emit_byte(code, 0x48 |
+	    ((source & 8) ? 0x04 : 0) |
+	    ((destination & 8) ? 0x01 : 0));
+  emit_byte(code, 0x0F);
+  emit_byte(code, 0x7E);
+  emit_byte(code, 0xC0 |
+	    ((source & 7) << 3) |
+	    (destination & 7));
+}
+
 static uint64_t operand_to_janet_bits(Operand *operand) {
   switch (operand->type) {
   case OPERAND_SIGNED_IMM:
@@ -2435,13 +2601,55 @@ static uint64_t operand_to_janet_bits(Operand *operand) {
   }
 }
 
-static void emit_operand_to_xmm(CodeBuffer *code, uint32_t destination, Operand *operand) {
+static void emit_xmm_mov(CodeBuffer *code, uint32_t dest, uint32_t source);
+
+static void emit_op_to_xmm(CodeBuffer *code, uint32_t destination, Operand *operand) {
   if (operand->type == OPERAND_VIRTUAL_REGISTER) {
-    emit_stack_to_xmm(code, destination, operand->virtual_register);
+    if (operand->physical_location.on_stack) {
+      emit_stack_to_xmm(code, destination, operand->physical_location.stack_offset);
+    } else {
+      emit_xmm_mov(code, destination, operand->physical_location.reg);
+    }
     return;
   }
   emit_imm_gpr(code, 0, operand_to_janet_bits(operand));
   emit_gpr_to_xmm(code, destination, 0);
+}
+
+static void emit_op_to_gpr(CodeBuffer *code, uint32_t destination, Operand *operand) {
+  if (operand->type == OPERAND_VIRTUAL_REGISTER) {
+    if (operand->physical_location.on_stack) {
+      emit_stack_to_gpr_bits(code, destination, operand->physical_location.stack_offset);
+    } else {
+      emit_xmm_to_gpr(code, destination, operand->physical_location.reg);
+    }
+    return;
+  }
+  emit_imm_gpr(code, destination, operand_to_janet_bits(operand));
+}
+
+static void emit_op_to_integer_gpr(CodeBuffer *code,
+                                   uint32_t destination,
+                                   Operand *operand) {
+  if (operand->type == OPERAND_VIRTUAL_REGISTER) {
+    if (operand->physical_location.on_stack) {
+      emit_stack_to_gpr(code, destination, operand->physical_location.stack_offset);
+    } else {
+      emit_xmm_to_integer_gpr(code, destination, operand->physical_location.reg);
+    }
+    return;
+  }
+
+  switch (operand->type) {
+  case OPERAND_SIGNED_IMM:
+    emit_imm_gpr(code, destination, (uint64_t)operand->imms);
+    return;
+  case OPERAND_UNSIGNED_IMM:
+    emit_imm_gpr(code, destination, operand->immus);
+    return;
+  default:
+    janet_panic("cannot materialize operand as an integer");
+  }
 }
 
 static void emit_imm_to_xmm(CodeBuffer *code, uint32_t destination, Operand *operand) {
@@ -2464,13 +2672,70 @@ static void emit_xmm_mov(CodeBuffer *code, uint32_t dest, uint32_t source) {
   emit_byte(code, 0xC0 | ((dest & 7) << 3) | (source & 7));
 }
 
+static void emit_gpr_to_stack_bits(CodeBuffer *code,
+                                   uint32_t destination,
+                                   uint32_t source) {
+  emit_byte(code, 0x48 | ((source & 8) ? 0x01 : 0));
+  emit_byte(code, 0x89);
+  emit_byte(code, 0x84 + ((source & 7) << 3));
+  emit_byte(code, 0x24);
+  emit_u32(code, destination * sizeof(Janet));
+}
+
+static void emit_gpr_to_op(CodeBuffer *code, Operand *dest, uint32_t source) {
+  if (dest->physical_location.on_stack) {
+    emit_gpr_to_stack_bits(code, dest->physical_location.stack_offset, source);
+  } else {
+    emit_gpr_to_xmm(code, dest->physical_location.reg, source);
+  }
+}
+
+static void emit_rax_to_op(CodeBuffer *code, Operand *dest) {
+  emit_gpr_to_op(code, dest, 0);
+}
+
+static void emit_xmm_to_op(CodeBuffer *code, Operand *dest, uint32_t source) {
+  if (dest->physical_location.on_stack) {
+    emit_xmm_to_stack(code, dest->physical_location.stack_offset, source);
+  } else {
+    emit_xmm_mov(code, dest->physical_location.reg, source);
+  }
+}
+
+static void emit_gpr_to_number_op(CodeBuffer *code, Operand *dest, uint32_t source) {
+  emit_byte(code, 0xF2);
+  emit_byte(code, 0x48 | ((source & 8) ? 0x01 : 0));
+  emit_byte(code, 0x0F);
+  emit_byte(code, 0x2A);
+  emit_byte(code, 0xC0 | (source & 7));
+  emit_xmm_to_op(code, dest, 0);
+}
+
+static void emit_store_imm_op(CodeBuffer *code, Operand *op, Operand *imm) {
+  emit_imm_gpr(code, 0, operand_to_janet_bits(imm));
+  emit_rax_to_op(code, op);
+}
+
 #define X86_ADD 0x58
 #define X86_MUL 0x59
 #define X86_SUB 0x5C
 #define X86_DIV 0x5E
 
+static void emit_binary_op_op(CodeBuffer *code, uint8_t op, Operand *dest, Operand *lhs, Operand *rhs) {
+  // TODO: if we know lhs is a register and the same we can reuse it here.
+  emit_op_to_xmm(code, 0, lhs);
+  emit_op_to_xmm(code, 1, rhs);
+
+  emit_byte(code, 0xF2);
+  emit_byte(code, 0x0F);
+  emit_byte(code, op);
+  emit_byte(code, 0xC0 + (0 << 3) + 1);
+
+  emit_xmm_to_op(code, dest, 0);
+}
+
+// TODO: make this unused
 static void emit_binary_op(CodeBuffer *code, uint8_t op, uint32_t dest, uint32_t lhs, uint32_t rhs) {
-  // op lhs, rhs
   if (dest != lhs) {
     emit_xmm_mov(code, dest, lhs);
   }
@@ -2519,9 +2784,9 @@ static void emit_comparison(CodeBuffer *code,
 			    bool reverse,
 			    uint8_t condition,
 			    int unordered_result,
-			    uint32_t destination) {
-  emit_operand_to_xmm(code, reverse ? 1 : 0, lhs);
-  emit_operand_to_xmm(code, reverse ? 0 : 1, rhs);
+			    Operand *destination) {
+  emit_op_to_xmm(code, reverse ? 1 : 0, lhs);
+  emit_op_to_xmm(code, reverse ? 0 : 1, rhs);
   emit_ucomisd(code, 0, 1);
 
   // MOV and CMOV preserve the comparison flags set by UCOMISD.
@@ -2538,7 +2803,7 @@ static void emit_comparison(CodeBuffer *code,
     emit_cmov(code, X86_CMOV_PARITY, 0, 2);
   }
 
-  emit_store_rax(code, destination);
+  emit_rax_to_op(code, destination);
 }
 
 static void emit_floor(CodeBuffer *code, uint32_t reg) {
@@ -2624,13 +2889,13 @@ static void emit_sign_extend_gpr_32(CodeBuffer *code, uint32_t reg) {
 static void emit_shift(CodeBuffer *code,
 		       uint8_t operation,
 		       bool signed_result,
-		       uint32_t destination,
-		       uint32_t lhs,
+		       Operand *destination,
+		       Operand *lhs,
 		       Operand *rhs) {
-  emit_stack_to_gpr(code, 0, lhs);
+  emit_op_to_integer_gpr(code, 0, lhs);
 
   if (rhs->type == OPERAND_VIRTUAL_REGISTER) {
-    emit_stack_to_gpr(code, 1, rhs->virtual_register);
+    emit_op_to_integer_gpr(code, 1, rhs);
     emit_gpr_shift(code, operation, 0);
   } else if (rhs->type == OPERAND_SIGNED_IMM) {
     emit_gpr_shift_immediate(code, operation, 0, (uint8_t) rhs->imms);
@@ -2643,15 +2908,15 @@ static void emit_shift(CodeBuffer *code,
   if (signed_result) {
     emit_sign_extend_gpr_32(code, 0);
   }
-  emit_gpr_to_stack(code, destination, 0);
+  emit_gpr_to_number_op(code, destination, 0);
 }
 
 static void emit_compare(CodeBuffer *code,
 			 Operand *lhs,
 			 Operand *rhs,
-			 uint32_t destination) {
-  emit_operand_to_xmm(code, 0, lhs);
-  emit_operand_to_xmm(code, 1, rhs);
+			 Operand *destination) {
+  emit_op_to_xmm(code, 0, lhs);
+  emit_op_to_xmm(code, 1, rhs);
   emit_ucomisd(code, 0, 1);
 
   // MOV and CMOV preserve the comparison flags set by UCOMISD.
@@ -2662,11 +2927,16 @@ static void emit_compare(CodeBuffer *code,
   emit_cmov(code, X86_CMOV_ABOVE, 0, 2);
   emit_cmov(code, X86_CMOV_PARITY, 0, 2);
 
-  emit_store_rax(code, destination);
+  emit_rax_to_op(code, destination);
 }
 
 // used for first arg when jumping back to C
 static int arg_loc[] = { 7, 6, 2, 1 };
+
+static void emit_op_to_arg(CodeBuffer *code, uint32_t dest, Operand *source) {
+  emit_op_to_gpr(code, arg_loc[dest], source);
+}
+
 static void emit_stack_to_arg(CodeBuffer *code, uint32_t dest, uint32_t stack_loc) {
   emit_byte(code, 0x48);
   emit_byte(code, 0x8B);
@@ -2689,12 +2959,37 @@ static void emit_non_janet_to_arg(CodeBuffer *code, uint32_t dest, uint32_t stac
   emit_u32(code, stack_loc);
 }
 
-static void emit_cfun_call(CodeBuffer *code, void *func) {
+static void emit_spill_vreg(CodeBuffer *code, Operand *op) {
+  emit_xmm_to_stack(code, op->physical_location.stack_offset, op->physical_location.reg);
+}
+
+static void emit_restore_vreg(CodeBuffer *code, Operand *op) {
+  emit_stack_to_xmm(code, op->physical_location.reg, op->physical_location.stack_offset);
+}
+
+
+static void emit_cfun_call(CodeBuffer *code, MethodBlocks *blocks, Instruction *instr, void *func) {
+  // spill registers
+  for (size_t vreg_i = 0; vreg_i < blocks->vreg_count; vreg_i++) {
+    if (blocks->vreg_defs[vreg_i] < instr->id && instr->id < blocks->vreg_last_uses[vreg_i] &&
+	blocks->vregs[vreg_i].physical_location.on_stack == false) {
+      emit_spill_vreg(code, &blocks->vregs[vreg_i]);
+    }
+  }
+
   emit_byte(code, 0x48);
   emit_byte(code, 0xB8);
   emit_u64(code, (uint64_t)(uintptr_t)func);
   emit_byte(code, 0xFF);
   emit_byte(code, 0xD0);
+
+  // restore registers
+  for (size_t vreg_i = 0; vreg_i < blocks->vreg_count; vreg_i++) {
+    if (blocks->vreg_defs[vreg_i] < instr->id && instr->id < blocks->vreg_last_uses[vreg_i] &&
+	blocks->vregs[vreg_i].physical_location.on_stack == false) {
+      emit_restore_vreg(code, &blocks->vregs[vreg_i]);
+    }
+  }
 }
 
 static void emit_arg_to_frame(CodeBuffer *code, uint32_t source, uint32_t stack_loc) {
@@ -2714,19 +3009,51 @@ static void emit_store_ret(CodeBuffer *code, uint32_t offset) {
   emit_u32(code, offset * sizeof(Janet));
 }
 
-static void emit_mov(CodeBuffer *code, uint32_t v_dest, uint32_t v_source) {
-  emit_stack_to_rax(code, v_source);
-  emit_store_rax(code, v_dest);
+static void emit_mov(CodeBuffer *code, Operand *dest, Operand *source) {
+  emit_op_to_gpr(code, 0, source);
+  emit_rax_to_op(code, dest);
 }
 
 static void emit_phi_moves(CodeBuffer *code, MethodBlocks *blocks, uint32_t bb_source, uint32_t bb_target) {
   BasicBlock *target_block = &blocks->blocks[bb_target];
+
+  // Snapshot register-resident sources first so parallel PHI copies cannot
+  // overwrite a source needed by a later copy.
   for (size_t pc = 0; pc < target_block->count; pc++) {
-    if (target_block->instructions[pc].type == HIR_PHI) {
-      for (size_t phi_i = 0; phi_i < target_block->instructions[pc].phi_source_count; phi_i++) {
-	if (target_block->instructions[pc].phi_sources[phi_i].bb == bb_source) {
-	  emit_mov(code, target_block->instructions[pc].result, target_block->instructions[pc].phi_sources[phi_i].virtual_register);
-	}
+    Instruction *instruction = &target_block->instructions[pc];
+    if (instruction->type != HIR_PHI) {
+      continue;
+    }
+
+    for (size_t phi_i = 0; phi_i < instruction->phi_source_count; phi_i++) {
+      PhiSource *phi_source = &instruction->phi_sources[phi_i];
+      if (phi_source->bb != bb_source) {
+        continue;
+      }
+
+      Operand *source = &blocks->vregs[phi_source->virtual_register];
+      if (!source->physical_location.on_stack) {
+        emit_op_to_gpr(code, 0, source);
+        emit_gpr_to_stack_bits(code, source->virtual_register, 0);
+      }
+    }
+  }
+
+  for (size_t pc = 0; pc < target_block->count; pc++) {
+    Instruction *instruction = &target_block->instructions[pc];
+    if (instruction->type != HIR_PHI) {
+      continue;
+    }
+
+    for (size_t phi_i = 0; phi_i < instruction->phi_source_count; phi_i++) {
+      PhiSource *phi_source = &instruction->phi_sources[phi_i];
+      if (phi_source->bb == bb_source) {
+        Operand source = blocks->vregs[phi_source->virtual_register];
+        source.physical_location = (PhysicalLocation) {
+          .on_stack = true,
+          .stack_offset = source.virtual_register,
+        };
+        emit_mov(code, &blocks->vregs[instruction->result], &source);
       }
     }
   }
@@ -2762,24 +3089,29 @@ static void emit_jump_placeholder(CodeBuffer *code, int32_t pc, size_t target_bb
   emit_u32(code, 0);
 }
 
-static void emit_binary_fallback(CodeBuffer *code, Instruction *instr, JitBinaryFallback fallback) {
-  emit_stack_to_arg(code, 0, instr->args[0]);
-  emit_stack_to_arg(code, 1, instr->args[1]);
-  emit_cfun_call(code, fallback);
-  emit_store_ret(code, instr->result);
+// TODO: this also needs to take operands
+static void emit_binary_fallback(CodeBuffer *code, MethodBlocks *blocks,
+                                 Instruction *instr, JitBinaryFallback fallback) {
+  emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+  emit_op_to_arg(code, 1, &blocks->vregs[instr->args[1]]);
+  emit_cfun_call(code, blocks, instr, fallback);
+  emit_rax_to_op(code, &blocks->vregs[instr->result]);
 }
 
-static void emit_binary_imm_fallback(CodeBuffer *code, Instruction *instr, Operand *imm, JitBinaryFallback fallback) {
-  emit_stack_to_arg(code, 0, instr->args[0]);
-  emit_imm_to_arg(code, 1, operand_to_janet_bits(imm));
-  emit_cfun_call(code, fallback);
-  emit_store_ret(code, instr->result);
+static void emit_binary_imm_fallback(CodeBuffer *code, MethodBlocks *blocks,
+                                     Instruction *instr, Operand *imm,
+                                     JitBinaryFallback fallback) {
+  emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+  emit_op_to_arg(code, 1, imm);
+  emit_cfun_call(code, blocks, instr, fallback);
+  emit_rax_to_op(code, &blocks->vregs[instr->result]);
 }
 
-static void emit_unary_fallback(CodeBuffer *code, Instruction *instr, JitUnaryFallback fallback) {
-  emit_stack_to_arg(code, 0, instr->args[0]);
-  emit_cfun_call(code, fallback);
-  emit_store_ret(code, instr->result);
+static void emit_unary_fallback(CodeBuffer *code, MethodBlocks *blocks,
+                                Instruction *instr, JitUnaryFallback fallback) {
+  emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+  emit_cfun_call(code, blocks, instr, fallback);
+  emit_rax_to_op(code, &blocks->vregs[instr->result]);
 }
 
 void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uint32_t block_id) {
@@ -2793,24 +3125,18 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_ERROR: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
-      emit_cfun_call(code, janet_panicv);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+      emit_cfun_call(code, blocks, instr, janet_panicv);
       break;
     }
     case HIR_TYPECHECK: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
       emit_imm_to_arg(code, 1, blocks->imms[instr->args[1]].immus);
-      emit_cfun_call(code, jit_typecheck);
+      emit_cfun_call(code, blocks, instr, jit_typecheck);
       break;
     }
     case HIR_RETURN: {
-      if (blocks->vregs[instr->args[0]].physical_register != 0 &&
-	  ENABLE_REGISTER_ALLOCATOR) {
-	emit_xmm_to_stack(code, instr->args[0], blocks->vregs[instr->args[0]].physical_register);
-	emit_stack_to_rax(code, instr->args[0]);
-      } else {
-	emit_stack_to_rax(code, instr->args[0]);
-      }
+      emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[0]]);
       if (stack_size > 0) {
 	emit_byte(code, 0x48);
 	emit_byte(code, 0x81);
@@ -2833,185 +3159,161 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_ADD: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_stack_to_xmm(code, 0, instr->args[0]);
-	emit_stack_to_xmm(code, 1, instr->args[1]);
-	emit_binary_op(code, X86_ADD, 0, 0, 1);
-	emit_xmm_to_stack(code, instr->result, 0);
+	emit_binary_op_op(code, X86_ADD, &blocks->vregs[instr->result],
+			  &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_add_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_add_fallback);
       }
       break;
     }
     case HIR_ADD_IMM: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
-	emit_stack_to_xmm(code, 0, instr->args[0]);
-	emit_imm_to_xmm(code, 1, &blocks->imms[instr->args[1]]);
-	emit_binary_op(code, X86_ADD, 0, 0, 1);
-	emit_xmm_to_stack(code, instr->result, 0);
+	emit_binary_op_op(code, X86_ADD, &blocks->vregs[instr->result],
+			  &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_add_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_add_fallback);
       }
       break;
     }
     case HIR_SUB: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_stack_to_xmm(code, 0, instr->args[0]);
-	emit_stack_to_xmm(code, 1, instr->args[1]);
-	emit_binary_op(code, X86_SUB, 0, 0, 1);
-	emit_xmm_to_stack(code, instr->result, 0);
+	emit_binary_op_op(code, X86_SUB, &blocks->vregs[instr->result],
+			  &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_sub_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_sub_fallback);
       }
       break;
     }
     case HIR_SUB_IMM: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
-	emit_stack_to_xmm(code, 0, instr->args[0]);
-	emit_imm_to_xmm(code, 1, &blocks->imms[instr->args[1]]);
-	emit_binary_op(code, X86_SUB, 0, 0, 1);
-	emit_xmm_to_stack(code, instr->result, 0);
+	emit_binary_op_op(code, X86_SUB, &blocks->vregs[instr->result],
+			  &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_sub_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_sub_fallback);
       }
       break;
     }
     case HIR_MUL: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	if (blocks->vregs[instr->args[0]].physical_register != 0 &&
-	    blocks->vregs[instr->args[1]].physical_register != 0 &&
-	    blocks->vregs[instr->result].physical_register != 0 &&
-	    ENABLE_REGISTER_ALLOCATOR) {
-	  emit_binary_op(code, X86_MUL,
-			 blocks->vregs[instr->result].physical_register,
-			 blocks->vregs[instr->args[0]].physical_register,
-			 blocks->vregs[instr->args[1]].physical_register);
-	} else {
-	  emit_stack_to_xmm(code, 0, instr->args[0]);
-	  emit_stack_to_xmm(code, 1, instr->args[1]);
-	  emit_binary_op(code, X86_MUL, 0, 0, 1);
-	  emit_xmm_to_stack(code, instr->result, 0);
-	}
+	emit_binary_op_op(code, X86_MUL,
+			  &blocks->vregs[instr->result],
+			  &blocks->vregs[instr->args[0]],
+			  &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_mul_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_mul_fallback);
       }
       break;
     }
     case HIR_MUL_IMM: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
-	emit_stack_to_xmm(code, 0, instr->args[0]);
-	emit_imm_to_xmm(code, 1, &blocks->imms[instr->args[1]]);
-	emit_binary_op(code, X86_MUL, 0, 0, 1);
-	emit_xmm_to_stack(code, instr->result, 0);
+	emit_binary_op_op(code, X86_MUL, &blocks->vregs[instr->result],
+			  &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_mul_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_mul_fallback);
       }
       break;
     }
     case HIR_DIV: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_stack_to_xmm(code, 0, instr->args[0]);
-	emit_stack_to_xmm(code, 1, instr->args[1]);
-	emit_binary_op(code, X86_DIV, 0, 0, 1);
-	emit_xmm_to_stack(code, instr->result, 0);
+	emit_binary_op_op(code, X86_DIV, &blocks->vregs[instr->result],
+			  &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_div_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_div_fallback);
       }
       break;
     }
     case HIR_DIV_IMM: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
-	emit_stack_to_xmm(code, 0, instr->args[0]);
-	emit_imm_to_xmm(code, 1, &blocks->imms[instr->args[1]]);
-	emit_binary_op(code, X86_DIV, 0, 0, 1);
-	emit_xmm_to_stack(code, instr->result, 0);
+	emit_binary_op_op(code, X86_DIV, &blocks->vregs[instr->result],
+			  &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_div_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_div_fallback);
       }
       break;
     }
     case HIR_DIV_FLOOR: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_stack_to_xmm(code, 0, instr->args[0]);
-	emit_stack_to_xmm(code, 1, instr->args[1]);
+	emit_op_to_xmm(code, 0, &blocks->vregs[instr->args[0]]);
+	emit_op_to_xmm(code, 1, &blocks->vregs[instr->args[1]]);
 	emit_binary_op(code, X86_DIV, 0, 0, 1);
 	emit_floor(code, 0);
-	emit_xmm_to_stack(code, instr->result, 0);
+	emit_xmm_to_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, instr, jit_divf_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_divf_fallback);
       }
       break;
     }
     case HIR_MODULO: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_stack_to_xmm(code, 0, instr->args[0]);
-	emit_stack_to_xmm(code, 1, instr->args[0]);
-	emit_stack_to_xmm(code, 2, instr->args[1]);
+	emit_op_to_xmm(code, 0, &blocks->vregs[instr->args[0]]);
+	emit_op_to_xmm(code, 1, &blocks->vregs[instr->args[0]]);
+	emit_op_to_xmm(code, 2, &blocks->vregs[instr->args[1]]);
 	emit_binary_op(code, X86_DIV, 1, 1, 2);
 	emit_floor(code, 1);
 	emit_binary_op(code, X86_MUL, 1, 1, 2);
 	emit_binary_op(code, X86_SUB, 0, 0, 1);
-	emit_xmm_to_stack(code, instr->result, 0);
+	emit_xmm_to_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, instr, jit_mod_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_mod_fallback);
       }
       break;
     }
     case HIR_REMAINDER: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_stack_to_xmm(code, 0, instr->args[0]);
-	emit_stack_to_xmm(code, 1, instr->args[0]);
-	emit_stack_to_xmm(code, 2, instr->args[1]);
+	emit_op_to_xmm(code, 0, &blocks->vregs[instr->args[0]]);
+	emit_op_to_xmm(code, 1, &blocks->vregs[instr->args[0]]);
+	emit_op_to_xmm(code, 2, &blocks->vregs[instr->args[1]]);
 	emit_binary_op(code, X86_DIV, 1, 1, 2);
 	emit_trunc(code, 1);
 	emit_binary_op(code, X86_MUL, 1, 1, 2);
 	emit_binary_op(code, X86_SUB, 0, 0, 1);
-	emit_xmm_to_stack(code, instr->result, 0);
+	emit_xmm_to_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, instr, jit_rem_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_rem_fallback);
       }
       break;
     }
     case HIR_AND: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
 	// Should do I do range checks here, or just say, "The jit rolls over"
-	emit_stack_to_gpr(code, 0, instr->args[0]);
-	emit_stack_to_gpr(code, 1, instr->args[1]);
+	emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+	emit_op_to_integer_gpr(code, 1, &blocks->vregs[instr->args[1]]);
 	emit_gpr_op(code, X86_AND_GPR, 0, 1);
-	emit_gpr_to_stack(code, instr->result, 0);
+	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, instr, jit_band_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_band_fallback);
       }
       break;
     }
     case HIR_OR: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_stack_to_gpr(code, 0, instr->args[0]);
-	emit_stack_to_gpr(code, 1, instr->args[1]);
+	emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+	emit_op_to_integer_gpr(code, 1, &blocks->vregs[instr->args[1]]);
 	emit_gpr_op(code, X86_OR_GPR, 0, 1);
-	emit_gpr_to_stack(code, instr->result, 0);
+	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, instr, jit_bor_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_bor_fallback);
       }
       break;
     }
     case HIR_XOR: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_stack_to_gpr(code, 0, instr->args[0]);
-	emit_stack_to_gpr(code, 1, instr->args[1]);
+	emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+	emit_op_to_integer_gpr(code, 1, &blocks->vregs[instr->args[1]]);
 	emit_gpr_op(code, X86_XOR_GPR, 0, 1);
-	emit_gpr_to_stack(code, instr->result, 0);
+	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, instr, jit_bxor_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_bxor_fallback);
       }
       break;
     }
     case HIR_NOT: {
       if (operand_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]])) {
-	emit_stack_to_gpr(code, 0, instr->args[0]);
+	emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
 	emit_not(code, 0);
-	emit_gpr_to_stack(code, instr->result, 0);
+	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_unary_fallback(code, instr, jit_bnot_fallback);
+	emit_unary_fallback(code, blocks, instr, jit_bnot_fallback);
       }
       break;
     }
@@ -3022,11 +3324,11 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 	emit_shift(code,
 		   X86_SHIFT_LEFT,
 		   true,
-		   instr->result,
-		   instr->args[0],
+		   &blocks->vregs[instr->result],
+		   &blocks->vregs[instr->args[0]],
 		   &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_blshift_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_blshift_fallback);
       }
       break;
     }
@@ -3037,11 +3339,11 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 	emit_shift(code,
 		   X86_SHIFT_LEFT,
 		   true,
-		   instr->result,
-		   instr->args[0],
+		   &blocks->vregs[instr->result],
+		   &blocks->vregs[instr->args[0]],
 		   &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_blshift_fallback);
+	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_blshift_fallback);
       }
       break;
     }
@@ -3052,11 +3354,11 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 	emit_shift(code,
 		   X86_SHIFT_RIGHT_SIGNED,
 		   true,
-		   instr->result,
-		   instr->args[0],
+		   &blocks->vregs[instr->result],
+		   &blocks->vregs[instr->args[0]],
 		   &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_brshift_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_brshift_fallback);
       }
       break;
     }
@@ -3067,11 +3369,11 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 	emit_shift(code,
 		   X86_SHIFT_RIGHT_SIGNED,
 		   true,
-		   instr->result,
-		   instr->args[0],
+		   &blocks->vregs[instr->result],
+		   &blocks->vregs[instr->args[0]],
 		   &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_brshift_fallback);
+	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_brshift_fallback);
       }
       break;
     }
@@ -3082,11 +3384,11 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 	emit_shift(code,
 		   X86_SHIFT_RIGHT_UNSIGNED,
 		   false,
-		   instr->result,
-		   instr->args[0],
+		   &blocks->vregs[instr->result],
+		   &blocks->vregs[instr->args[0]],
 		   &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, instr, jit_brushift_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_brushift_fallback);
       }
       break;
     }
@@ -3097,11 +3399,11 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 	emit_shift(code,
 		   X86_SHIFT_RIGHT_UNSIGNED,
 		   false,
-		   instr->result,
-		   instr->args[0],
+		   &blocks->vregs[instr->result],
+		   &blocks->vregs[instr->args[0]],
 		   &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_brushift_fallback);
+	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_brushift_fallback);
       }
       break;
     }
@@ -3112,8 +3414,8 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_JUMP_IF: {
-      emit_stack_to_arg(code, 0, instr->args[2]);
-      emit_cfun_call(code, janet_truthy);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
+      emit_cfun_call(code, blocks, instr, janet_truthy);
       // compare
       emit_byte(code, 0x85);
       emit_byte(code, 0xC0);
@@ -3141,8 +3443,8 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_JUMP_IF_NOT: {
       // jump if conditional true to <A>
-      emit_stack_to_arg(code, 0, instr->args[2]);
-      emit_cfun_call(code, janet_truthy);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
+      emit_cfun_call(code, blocks, instr, janet_truthy);
       // compare
       emit_byte(code, 0x85);
       emit_byte(code, 0xC0);
@@ -3170,8 +3472,8 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_JUMP_IF_NIL: {
       // jump if conditional true to <A>
-      emit_stack_to_arg(code, 0, instr->args[2]);
-      emit_cfun_call(code, jit_nil);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
+      emit_cfun_call(code, blocks, instr, jit_nil);
       // compare
       emit_byte(code, 0x85);
       emit_byte(code, 0xC0);
@@ -3199,8 +3501,8 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_JUMP_IF_NOT_NIL: {
       // jump if conditional true to <A>
-      emit_stack_to_arg(code, 0, instr->args[2]);
-      emit_cfun_call(code, jit_nil);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
+      emit_cfun_call(code, blocks, instr, jit_nil);
       // compare
       emit_byte(code, 0x85);
       emit_byte(code, 0xC0);
@@ -3236,9 +3538,9 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 			false,
 			X86_CMOV_ABOVE,
 			-1,
-			instr->result);
+			&blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, instr, jit_greater_than_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_greater_than_fallback);
       }
       break;
     }
@@ -3252,9 +3554,9 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 			false,
 			X86_CMOV_ABOVE,
 			-1,
-			instr->result);
+			&blocks->vregs[instr->result]);
       } else {
-	emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_greater_than_fallback);
+	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_greater_than_fallback);
       }
       break;
     }
@@ -3268,9 +3570,9 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 			true,
 			X86_CMOV_ABOVE,
 			-1,
-			instr->result);
+			&blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, instr, jit_less_than_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_less_than_fallback);
       }
       break;
     }
@@ -3284,9 +3586,9 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 			true,
 			X86_CMOV_ABOVE,
 			-1,
-			instr->result);
+			&blocks->vregs[instr->result]);
       } else {
-	emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_less_than_fallback);
+	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_less_than_fallback);
       }
       break;
     }
@@ -3300,9 +3602,9 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 			false,
 			X86_CMOV_EQUAL,
 			false,
-			instr->result);
+			&blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, instr, jit_equals_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_equals_fallback);
       }
       break;
     }
@@ -3316,9 +3618,9 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 			false,
 			X86_CMOV_EQUAL,
 			false,
-			instr->result);
+			&blocks->vregs[instr->result]);
       } else {
-	emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_equals_fallback);
+	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_equals_fallback);
       }
       break;
     }
@@ -3329,22 +3631,19 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 	emit_compare(code,
 		     &blocks->vregs[instr->args[0]],
 		     &blocks->vregs[instr->args[1]],
-		     instr->result);
+		     &blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, instr, jit_compare_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_compare_fallback);
       }
       break;
     }
     case HIR_LOAD: {
-      emit_imm_gpr(code, 0, operand_to_janet_bits(&blocks->imms[instr->args[0]]));
-      emit_store_rax(code, instr->result);
+      emit_store_imm_op(code, &blocks->vregs[instr->result], &blocks->imms[instr->args[0]]);
       break;
     }
     case HIR_LOAD_ARG: {
-      if (blocks->vregs[instr->args[0]].physical_register != 0 &&
-	  blocks->vregs[instr->result].physical_register != 0 &&
-	  ENABLE_REGISTER_ALLOCATOR) {
-	emit_arg_to_xmm(code, blocks->imms[instr->args[0]].immus, blocks->vregs[instr->result].physical_register);
+      if (blocks->vregs[instr->result].physical_location.on_stack == false) {
+	emit_arg_to_xmm(code, blocks->imms[instr->args[0]].immus, blocks->vregs[instr->result].physical_location.reg);
       } else {
 	emit_arg_to_stack(code, blocks->imms[instr->args[0]].immus, instr->result);
       }
@@ -3352,36 +3651,36 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_PUSH: {
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      emit_stack_to_arg(code, 1, instr->args[0]);
-      emit_cfun_call(code, jit_push);
+      emit_op_to_arg(code, 1, &blocks->vregs[instr->args[0]]);
+      emit_cfun_call(code, blocks, instr, jit_push);
       break;
     }
     case HIR_PUSH2: {
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      emit_stack_to_arg(code, 1, instr->args[0]);
-      emit_stack_to_arg(code, 2, instr->args[1]);
-      emit_cfun_call(code, jit_push_2);
+      emit_op_to_arg(code, 1, &blocks->vregs[instr->args[0]]);
+      emit_op_to_arg(code, 2, &blocks->vregs[instr->args[1]]);
+      emit_cfun_call(code, blocks, instr, jit_push_2);
       break;
     }
     case HIR_PUSH3: {
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      emit_stack_to_arg(code, 1, instr->args[0]);
-      emit_stack_to_arg(code, 2, instr->args[1]);
-      emit_stack_to_arg(code, 3, instr->args[2]);
-      emit_cfun_call(code, jit_push_3);
+      emit_op_to_arg(code, 1, &blocks->vregs[instr->args[0]]);
+      emit_op_to_arg(code, 2, &blocks->vregs[instr->args[1]]);
+      emit_op_to_arg(code, 3, &blocks->vregs[instr->args[2]]);
+      emit_cfun_call(code, blocks, instr, jit_push_3);
       break;
     }
     case HIR_CALL: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
       emit_non_janet_to_arg(code, 1, call_args_loc);
-      emit_cfun_call(code, jit_call);
-      emit_store_ret(code, instr->result);
+      emit_cfun_call(code, blocks, instr, jit_call);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     }
     case HIR_TAIL_CALL: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
       emit_non_janet_to_arg(code, 1, call_args_loc);
-      emit_cfun_call(code, jit_call);
+      emit_cfun_call(code, blocks, instr, jit_call);
       if (stack_size > 0) {
 	// stack adjust
 	emit_byte(code, 0x48);
@@ -3393,80 +3692,80 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_IN: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
-      emit_stack_to_arg(code, 1, instr->args[1]);
-      emit_cfun_call(code, janet_in);
-      emit_store_ret(code, instr->result);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+      emit_op_to_arg(code, 1, &blocks->vregs[instr->args[1]]);
+      emit_cfun_call(code, blocks, instr, janet_in);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     }
     case HIR_GET: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
-      emit_stack_to_arg(code, 1, instr->args[1]);
-      emit_cfun_call(code, janet_get);
-      emit_store_ret(code, instr->result);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+      emit_op_to_arg(code, 1, &blocks->vregs[instr->args[1]]);
+      emit_cfun_call(code, blocks, instr, janet_get);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     }
     case HIR_GET_INDEX: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
       emit_imm_to_arg(code, 1, blocks->imms[instr->args[1]].immus);
-      emit_cfun_call(code, janet_getindex);
-      emit_store_ret(code, instr->result);
+      emit_cfun_call(code, blocks, instr, janet_getindex);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     }
     case HIR_PUT: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
-      emit_stack_to_arg(code, 1, instr->args[1]);
-      emit_stack_to_arg(code, 2, instr->args[2]);
-      emit_cfun_call(code, janet_put);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+      emit_op_to_arg(code, 1, &blocks->vregs[instr->args[1]]);
+      emit_op_to_arg(code, 2, &blocks->vregs[instr->args[2]]);
+      emit_cfun_call(code, blocks, instr, janet_put);
       break;
     }
     case HIR_PUT_INDEX: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
       emit_imm_to_arg(code, 1, operand_to_janet_bits(&blocks->imms[instr->args[1]]));
-      emit_stack_to_arg(code, 2, instr->args[2]);
-      emit_cfun_call(code, janet_put);
+      emit_op_to_arg(code, 2, &blocks->vregs[instr->args[2]]);
+      emit_cfun_call(code, blocks, instr, janet_put);
       break;
     }
     case HIR_LENGTH: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
-      emit_cfun_call(code, janet_lengthv);
-      emit_store_ret(code, instr->result);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+      emit_cfun_call(code, blocks, instr, janet_lengthv);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     }
     case HIR_MAKE_ARRAY:
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      emit_cfun_call(code, jit_make_array);
-      emit_store_ret(code, instr->result);
+      emit_cfun_call(code, blocks, instr, jit_make_array);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     case HIR_MAKE_TUPLE:
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      emit_cfun_call(code, jit_make_tuple);
-      emit_store_ret(code, instr->result);
+      emit_cfun_call(code, blocks, instr, jit_make_tuple);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     case HIR_MAKE_BRACKET_TUPLE:
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      emit_cfun_call(code, jit_make_bracket_tuple);
-      emit_store_ret(code, instr->result);
+      emit_cfun_call(code, blocks, instr, jit_make_bracket_tuple);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     case HIR_MAKE_BUFFER:
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      emit_cfun_call(code, jit_make_buffer);
-      emit_store_ret(code, instr->result);
+      emit_cfun_call(code, blocks, instr, jit_make_buffer);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     case HIR_MAKE_STRING:
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      emit_cfun_call(code, jit_make_string);
-      emit_store_ret(code, instr->result);
+      emit_cfun_call(code, blocks, instr, jit_make_string);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     case HIR_MAKE_STRUCT:
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      emit_cfun_call(code, jit_make_struct);
-      emit_store_ret(code, instr->result);
+      emit_cfun_call(code, blocks, instr, jit_make_struct);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     case HIR_MAKE_TABLE:
       emit_non_janet_to_arg(code, 0, call_args_loc);
-      emit_cfun_call(code, jit_make_table);
-      emit_store_ret(code, instr->result);
+      emit_cfun_call(code, blocks, instr, jit_make_table);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     case HIR_GREATER_THAN_EQUAL: {
       if (operands_numeric(blocks->virtual_register_types,
@@ -3478,9 +3777,9 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 			false,
 			X86_CMOV_ABOVE_EQUAL,
 			-1,
-			instr->result);
+			&blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, instr, jit_greater_than_equal_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_greater_than_equal_fallback);
       }
       break;
     }
@@ -3494,17 +3793,17 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 			true,
 			X86_CMOV_ABOVE_EQUAL,
 			-1,
-			instr->result);
+			&blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, instr, jit_less_than_equal_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_less_than_equal_fallback);
       }
       break;
     }
     case HIR_NEXT: {
-      emit_stack_to_arg(code, 0, instr->args[0]);
-      emit_stack_to_arg(code, 1, instr->args[1]);
-      emit_cfun_call(code, janet_next);
-      emit_store_ret(code, instr->result);
+      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+      emit_op_to_arg(code, 1, &blocks->vregs[instr->args[1]]);
+      emit_cfun_call(code, blocks, instr, janet_next);
+      emit_rax_to_op(code, &blocks->vregs[instr->result]);
       break;
     }
     case HIR_NOT_EQUALS: {
@@ -3517,9 +3816,9 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 			false,
 			X86_CMOV_NOT_EQUAL,
 			true,
-			instr->result);
+			&blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, instr, jit_not_equals_fallback);
+	emit_binary_fallback(code, blocks, instr, jit_not_equals_fallback);
       }
       break;
     }
@@ -3533,9 +3832,9 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
 			false,
 			X86_CMOV_NOT_EQUAL,
 			true,
-			instr->result);
+			&blocks->vregs[instr->result]);
       } else {
-	emit_binary_imm_fallback(code, instr, &blocks->imms[instr->args[1]], jit_not_equals_fallback);
+	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_not_equals_fallback);
       }
       break;
     }
@@ -3642,6 +3941,8 @@ static void free_method_blocks(MethodBlocks *blocks) {
   free(blocks->imms);
   free(blocks->bbs);
   free(blocks->virtual_register_types);
+  free(blocks->vreg_defs);
+  free(blocks->vreg_last_uses);
 
   *blocks = (MethodBlocks) {0};
 }
@@ -3779,7 +4080,7 @@ static Janet jitted_function_call(void *p, int32_t argc, Janet *argv) {
       jitted->signature_arg_types[i] = janet_type(argv[i]);
     }
     type_flow(&jitted->method_blocks, argc, argv);
-    block_local_register_allocate(&jitted->method_blocks);
+    register_allocate(&jitted->method_blocks);
     /* print_basic_blocks(&jitted->method_blocks); */
     compile(jitted);
     Janet res = ((JitFn)jitted->code)(argv, &jitted->ca);
