@@ -1865,7 +1865,7 @@ static void register_allocate(MethodBlocks *blocks) {
   // allocate 8 registers (for now)
   // and spill everything else
   // for now codegen will assume all registers are volatile.
-  size_t available_registers = 2; // 8;
+  size_t available_registers = 8;
   bool register_free[] = { true, true, true, true, true, true, true, true };
   instruction_location = 0;
 
@@ -2477,6 +2477,9 @@ static void emit_u64(CodeBuffer *code, uint64_t value) {
 
 void emit_arg_to_xmm(CodeBuffer *code, uint32_t arg_num, uint32_t xmm_num) {
   emit_byte(code, 0xF2);
+  if (xmm_num & 8) {
+    emit_byte(code, 0x44);
+  }
   emit_byte(code, 0x0F);
   emit_byte(code, 0x10);
   emit_byte(code, 0x87 | ((xmm_num & 7) << 3));
@@ -2499,9 +2502,12 @@ void emit_arg_to_stack(CodeBuffer *code, uint32_t arg_num, uint32_t stack_num) {
 static void emit_stack_to_xmm(CodeBuffer *code, uint32_t dest, uint32_t source) {
   // xmm(dest), rdi + source
   emit_byte(code, 0xF2);
+  if (dest & 8) {
+    emit_byte(code, 0x44);
+  }
   emit_byte(code, 0x0F);
   emit_byte(code, 0x10);
-  emit_byte(code, 0x84 + (dest << 3));
+  emit_byte(code, 0x84 + ((dest & 7) << 3));
   emit_byte(code, 0x24);
   emit_u32(code, source * sizeof(Janet));
 }
@@ -2509,9 +2515,12 @@ static void emit_stack_to_xmm(CodeBuffer *code, uint32_t dest, uint32_t source) 
 static void emit_xmm_to_stack(CodeBuffer *code, uint32_t dest, uint32_t source) {
   // rsi + source, xmm(dest)
   emit_byte(code, 0xF2);
+  if (source & 8) {
+    emit_byte(code, 0x44);
+  }
   emit_byte(code, 0x0F);
   emit_byte(code, 0x11);
-  emit_byte(code, 0x84 + (source << 3));
+  emit_byte(code, 0x84 + ((source & 7) << 3));
   emit_byte(code, 0x24);
   emit_u32(code, dest * sizeof(Janet));
 }
@@ -2669,6 +2678,11 @@ static void emit_store_rax(CodeBuffer *code, uint32_t offset) {
 
 static void emit_xmm_mov(CodeBuffer *code, uint32_t dest, uint32_t source) {
   emit_byte(code, 0xF2);
+  if ((dest | source) & 8) {
+    emit_byte(code, 0x40 |
+              ((dest & 8) ? 0x04 : 0) |
+              ((source & 8) ? 0x01 : 0));
+  }
   emit_byte(code, 0x0F);
   emit_byte(code, 0x10);
   emit_byte(code, 0xC0 | ((dest & 7) << 3) | (source & 7));

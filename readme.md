@@ -111,24 +111,24 @@ $ jpm build && janet benchmarks/microbench.janet
 ---------------------------------------------------------------------------------------
 | name                  | interpreter ips   | interpreter elapsed | jit ips           | jit elapsed     | times faster |
 |-----------------------|-------------------|---------------------|-------------------|-----------------|--------------|
-| fib                   | 133.8781 ips      | 7.4695 ellapsed     | 248.2442 ips      | 4.0283 ellapsed | 1.85x faster |
-| 10 mul                | 22031517.0047 ips | 4.5390 ellapsed     | 51974349.7811 ips | 1.9240 ellapsed | 2.36x faster |
-| len (tuple)           | 32352740.9406 ips | 3.0909 ellapsed     | 47378685.5751 ips | 2.1107 ellapsed | 1.46x faster |
-| get (tuple & number)  | 30408868.5913 ips | 3.2885 ellapsed     | 43722734.9833 ips | 2.2871 ellapsed | 1.44x faster |
-| lerp                  | 27538952.0302 ips | 0.3631 ellapsed     | 44019993.3000 ips | 0.2272 ellapsed | 1.60x faster |
-| fade                  | 15102558.2411 ips | 0.6621 ellapsed     | 42252826.9305 ips | 0.2367 ellapsed | 2.80x faster |
-| dot                   | 26314413.4375 ips | 0.3800 ellapsed     | 42530503.1858 ips | 0.2351 ellapsed | 1.62x faster |
-| bubble sort           | 602.0981 ips      | 1.6609 ellapsed     | 608.0222 ips      | 1.6447 ellapsed | 1.01x faster |
-| perlin gradients      | 89155.1173 ips    | 1.1216 ellapsed     | 117511.0833 ips   | 0.8510 ellapsed | 1.32x faster |
-| in                    | 25656890.1517 ips | 0.3898 ellapsed     | 42126377.2528 ips | 0.2374 ellapsed | 1.64x faster |
-| get                   | 26572971.5030 ips | 0.3763 ellapsed     | 43025828.7535 ips | 0.2324 ellapsed | 1.62x faster |
-| call                  | 25661979.3710 ips | 0.3897 ellapsed     | 21168456.9973 ips | 0.4724 ellapsed | 0.82x faster |
-| C call                | 21760819.3959 ips | 0.4595 ellapsed     | 29688328.8660 ips | 0.3368 ellapsed | 1.36x faster |
-| call jit              | 27227228.8372 ips | 0.0367 ellapsed     | 32638293.2601 ips | 0.0306 ellapsed | 1.20x faster |
-| deep-not= (false)     | 1564670.8341 ips  | 0.0639 ellapsed     | 1575417.5624 ips  | 0.0635 ellapsed | 1.01x faster |
-| cmp (numeric)         | 29406045.8350 ips | 0.3401 ellapsed     | 46887159.1591 ips | 0.2133 ellapsed | 1.59x faster |
-| cmp (type difference) | 29880584.2176 ips | 0.3347 ellapsed     | 36833424.8658 ips | 0.2715 ellapsed | 1.23x faster |
-| cmp (not numeric)     | 24846590.9369 ips | 0.0402 ellapsed     | 29050851.4501 ips | 0.0344 ellapsed | 1.17x faster |
+| fib                   | 133.6935 ips      | 7.4798 ellapsed     | 239.2511 ips      | 4.1797 ellapsed | 1.79x faster |
+| 10 mul                | 20632467.2423 ips | 4.8467 ellapsed     | 47215853.8607 ips | 2.1179 ellapsed | 2.29x faster |
+| len (tuple)           | 31648314.9313 ips | 3.1597 ellapsed     | 46636476.5745 ips | 2.1442 ellapsed | 1.47x faster |
+| get (tuple & number)  | 30175096.3800 ips | 3.3140 ellapsed     | 43519952.6056 ips | 2.2978 ellapsed | 1.44x faster |
+| lerp                  | 28570264.1290 ips | 0.3500 ellapsed     | 44939597.9220 ips | 0.2225 ellapsed | 1.57x faster |
+| fade                  | 14658801.2582 ips | 0.6822 ellapsed     | 42330445.9796 ips | 0.2362 ellapsed | 2.89x faster |
+| dot                   | 27992717.8399 ips | 0.3572 ellapsed     | 51888382.1966 ips | 0.1927 ellapsed | 1.85x faster |
+| bubble sort           | 600.8210 ips      | 1.6644 ellapsed     | 574.2124 ips      | 1.7415 ellapsed | 0.96x faster |
+| perlin gradients      | 90163.0899 ips    | 1.1091 ellapsed     | 108192.8611 ips   | 0.9243 ellapsed | 1.20x faster |
+| in                    | 27070759.1799 ips | 0.3694 ellapsed     | 46542171.6941 ips | 0.2149 ellapsed | 1.72x faster |
+| get                   | 27081496.1872 ips | 0.3693 ellapsed     | 49009707.6422 ips | 0.2040 ellapsed | 1.81x faster |
+| call                  | 26106147.6279 ips | 0.3831 ellapsed     | 22730621.4644 ips | 0.4399 ellapsed | 0.87x faster |
+| C call                | 20340909.9071 ips | 0.4916 ellapsed     | 27925610.9201 ips | 0.3581 ellapsed | 1.37x faster |
+| call jit              | 27525602.7360 ips | 0.0363 ellapsed     | 34025719.2889 ips | 0.0294 ellapsed | 1.24x faster |
+| deep-not= (false)     | 1596794.1483 ips  | 0.0626 ellapsed     | 1505129.5417 ips  | 0.0664 ellapsed | 0.94x faster |
+| cmp (numeric)         | 28687928.7746 ips | 0.3486 ellapsed     | 41006155.7411 ips | 0.2439 ellapsed | 1.43x faster |
+| cmp (type difference) | 32248402.6862 ips | 0.3101 ellapsed     | 42636771.7187 ips | 0.2345 ellapsed | 1.32x faster |
+| cmp (not numeric)     | 25514445.2067 ips | 0.0392 ellapsed     | 28952353.8645 ips | 0.0345 ellapsed | 1.13x faster |
 
 ## Notable Differences from Janet interpreter
 
@@ -177,6 +177,8 @@ Using these operators can slow down jitted functions, but should work as expecte
 All other operations can also fall back to the VM when runtime type information isn't provable.
 
 ## Other things
+
+- `(lds)` load self in a jitted function returns the jitted abstract self. This is required to allow Jitted functions to recurse to the jitted version instead of the Janet version, but can change program semantics.
 
 - Calling out of the JIT uses `janet_call` which means GC will not run. This can be a benefit, or a mistake depending on the application. Calls also have a ~10% performance penalty. If you need to leave the JIT a lot, you won't have good JIT performance.
 
