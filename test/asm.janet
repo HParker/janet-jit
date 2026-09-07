@@ -255,6 +255,7 @@
 				  (ret 2)]
 		      :arity 3}))
 (jit-result-matches my-jmpni true :ant :bee)
+(jit-result-matches my-jmpni nil :ant :bee)
 
 # jmpnn: if $cond != nil pc += offset else pc++
 (def my-jmpnn (asm ~{:bytecode @[(jmpnn 0 2)
@@ -262,6 +263,7 @@
 				 (ret 2)]
 		     :arity 3}))
 (jit-result-matches my-jmpnn true :ant :bee)
+(jit-result-matches my-jmpnn nil :ant :bee)
 
 
 # jmpno: if $cond pc++ else pc += offset

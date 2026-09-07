@@ -3430,11 +3430,17 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_JUMP_IF: {
-      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
-      emit_cfun_call(code, blocks, instr, janet_truthy);
-      // compare
-      emit_byte(code, 0x85);
-      emit_byte(code, 0xC0);
+      if (operand_type(blocks, &blocks->vregs[instr->args[2]]) == JANET_TFLAG_BOOLEAN) {
+	emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[2]]);
+	emit_byte(code, 0xF6);
+	emit_byte(code, 0xC0);
+	emit_byte(code, 0x01);
+      } else {
+	emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
+	emit_cfun_call(code, blocks, instr, janet_truthy);
+	emit_byte(code, 0x85);
+	emit_byte(code, 0xC0);
+      }
       // conditional jump
       emit_byte(code, 0x0F);
       emit_byte(code, 0x84); // JZ
@@ -3458,12 +3464,18 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_JUMP_IF_NOT: {
-      // jump if conditional true to <A>
-      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
-      emit_cfun_call(code, blocks, instr, janet_truthy);
-      // compare
-      emit_byte(code, 0x85);
-      emit_byte(code, 0xC0);
+      if (operand_type(blocks, &blocks->vregs[instr->args[2]]) == JANET_TFLAG_BOOLEAN) {
+	emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[2]]);
+	emit_byte(code, 0xF6);
+	emit_byte(code, 0xC0);
+	emit_byte(code, 0x01);
+      } else {
+	// jump if conditional true to <A>
+	emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
+	emit_cfun_call(code, blocks, instr, janet_truthy);
+	emit_byte(code, 0x85);
+	emit_byte(code, 0xC0);
+      }
       // conditional jump
       emit_byte(code, 0x0F);
       emit_byte(code, 0x85); // JNZ
@@ -3487,6 +3499,21 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_JUMP_IF_NIL: {
+      uint32_t condition_types =
+        operand_type(blocks, &blocks->vregs[instr->args[2]]);
+      if (condition_types == JANET_TFLAG_NIL) {
+        emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[0]].bb);
+        emit_byte(code, 0xE9);
+        emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[0]].bb);
+        break;
+      }
+      if (condition_types != 0 && !(condition_types & JANET_TFLAG_NIL)) {
+        emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[1]].bb);
+        emit_byte(code, 0xE9);
+        emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[1]].bb);
+        break;
+      }
+
       // jump if conditional true to <A>
       emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
       emit_cfun_call(code, blocks, instr, jit_nil);
@@ -3516,6 +3543,21 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_JUMP_IF_NOT_NIL: {
+      uint32_t condition_types =
+        operand_type(blocks, &blocks->vregs[instr->args[2]]);
+      if (condition_types == JANET_TFLAG_NIL) {
+        emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[1]].bb);
+        emit_byte(code, 0xE9);
+        emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[1]].bb);
+        break;
+      }
+      if (condition_types != 0 && !(condition_types & JANET_TFLAG_NIL)) {
+        emit_phi_moves(code, blocks, block_id, blocks->bbs[instr->args[0]].bb);
+        emit_byte(code, 0xE9);
+        emit_jump_placeholder(code, code->count, blocks->bbs[instr->args[0]].bb);
+        break;
+      }
+
       // jump if conditional true to <A>
       emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
       emit_cfun_call(code, blocks, instr, jit_nil);
@@ -3743,9 +3785,51 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     }
     case HIR_LENGTH: {
-      emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
-      emit_cfun_call(code, blocks, instr, janet_lengthv);
-      emit_rax_to_op(code, &blocks->vregs[instr->result]);
+      if (operand_type(blocks, &blocks->vregs[instr->args[0]]) == JANET_TFLAG_TUPLE) {
+	emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+
+	// rax &= JANET_NANBOX_PAYLOADBITS
+	// On the current x86-64 configuration, retain the low 47 payload bits.
+	emit_byte(code, 0x48); // shl rax, 17
+	emit_byte(code, 0xC1);
+	emit_byte(code, 0xE0);
+	emit_byte(code, 17);
+
+	emit_byte(code, 0x48); // shr rax, 17
+	emit_byte(code, 0xC1);
+	emit_byte(code, 0xE8);
+	emit_byte(code, 17);
+
+	// mov eax, rax + length_offset
+	emit_byte(code, 0x8B);
+	emit_byte(code, 0x80);
+	emit_u32(code, (int32_t)(offsetof(JanetTupleHead, length) - offsetof(JanetTupleHead, data)));
+	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
+      } else if (operand_type(blocks, &blocks->vregs[instr->args[0]]) == JANET_TFLAG_STRING) {
+	emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+
+	// rax &= JANET_NANBOX_PAYLOADBITS
+	// On the current x86-64 configuration, retain the low 47 payload bits.
+	emit_byte(code, 0x48); // shl rax, 17
+	emit_byte(code, 0xC1);
+	emit_byte(code, 0xE0);
+	emit_byte(code, 17);
+
+	emit_byte(code, 0x48); // shr rax, 17
+	emit_byte(code, 0xC1);
+	emit_byte(code, 0xE8);
+	emit_byte(code, 17);
+
+	// mov eax, rax + length_offset
+	emit_byte(code, 0x8B);
+	emit_byte(code, 0x80);
+	emit_u32(code, (int32_t)(offsetof(JanetStringHead, length) - offsetof(JanetStringHead, data)));
+	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
+      } else { // TODO: more type special cases here
+	emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+	emit_cfun_call(code, blocks, instr, janet_lengthv);
+	emit_rax_to_op(code, &blocks->vregs[instr->result]);
+      }
       break;
     }
     case HIR_MAKE_ARRAY:
