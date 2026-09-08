@@ -417,7 +417,7 @@ Instruction *add_instruction(MethodBlocks *blocks, size_t block_id, InstructionT
       CUR_BLOCK.capacity *= 2;
       CUR_BLOCK.instructions = realloc(CUR_BLOCK.instructions, CUR_BLOCK.capacity * sizeof(Instruction));
       if (CUR_BLOCK.instructions == NULL) {
-	janet_panic("JIT could not allocate while generating instructions");
+        janet_panic("JIT could not allocate while generating instructions");
       }
     } else {
       janet_panic("JIT ran out of memory generating instructions");
@@ -449,7 +449,7 @@ void add_edge(MethodBlocks *blocks, size_t source_bb, size_t target_bb) {
       source_block->output_edge_capacity *= 2;
       source_block->output_edges = realloc(source_block->output_edges, source_block->output_edge_capacity * sizeof(Edge));
       if (source_block->output_edges == NULL) {
-	janet_panic("JIT could not allocate while generating edges");
+        janet_panic("JIT could not allocate while generating edges");
       }
     } else {
       janet_panic("JIT ran out of memory generating edges");
@@ -461,7 +461,7 @@ void add_edge(MethodBlocks *blocks, size_t source_bb, size_t target_bb) {
       target_block->input_edge_capacity *= 2;
       target_block->input_edges = realloc(target_block->input_edges, target_block->input_edge_capacity * sizeof(Edge));
       if (target_block->input_edges == NULL) {
-	janet_panic("JIT could not allocate while generating edges");
+        janet_panic("JIT could not allocate while generating edges");
       }
     } else {
       janet_panic("JIT ran out of memory generating edges");
@@ -478,7 +478,7 @@ size_t new_basic_block(MethodBlocks *blocks, size_t slotcount, size_t start_pc) 
       blocks->capacity *= 2;
       blocks->blocks = realloc(blocks->blocks, blocks->capacity * sizeof(BasicBlock));
       if (blocks->blocks == NULL) {
-	janet_panic("JIT could not allocate while generating basic blocks");
+        janet_panic("JIT could not allocate while generating basic blocks");
       }
     } else {
       janet_panic("JIT ran out of memory generating basic blocks");
@@ -532,9 +532,9 @@ static void add_slot_def(BasicBlock *block, size_t slot) {
 }
 
 static void ensure_operand_capacity(Operand **operands,
-				    size_t *capacity,
-				    size_t count,
-				    const char *kind) {
+                                    size_t *capacity,
+                                    size_t count,
+                                    const char *kind) {
   if (count < *capacity) {
     return;
   }
@@ -553,17 +553,17 @@ static void ensure_operand_capacity(Operand **operands,
   }
 
   memset(new_operands + old_capacity,
-	 0,
-	 (new_capacity - old_capacity) * sizeof(Operand));
+         0,
+         (new_capacity - old_capacity) * sizeof(Operand));
   *operands = new_operands;
   *capacity = new_capacity;
 }
 
 static size_t new_vreg(MethodBlocks *blocks) {
   ensure_operand_capacity(&blocks->vregs,
-			  &blocks->vreg_capacity,
-			  blocks->vreg_count,
-			  "virtual register");
+                          &blocks->vreg_capacity,
+                          blocks->vreg_count,
+                          "virtual register");
 
   size_t index = blocks->vreg_count++;
   blocks->vregs[index] = (Operand) {
@@ -576,9 +576,9 @@ static size_t new_vreg(MethodBlocks *blocks) {
 
 static size_t new_immus(MethodBlocks *blocks, uint32_t val) {
   ensure_operand_capacity(&blocks->imms,
-			  &blocks->imm_capacity,
-			  blocks->imm_count,
-			  "immediate");
+                          &blocks->imm_capacity,
+                          blocks->imm_count,
+                          "immediate");
 
   size_t index = blocks->imm_count++;
   blocks->imms[index] = (Operand) {
@@ -590,9 +590,9 @@ static size_t new_immus(MethodBlocks *blocks, uint32_t val) {
 
 static size_t new_bb(MethodBlocks *blocks, uint32_t val) {
   ensure_operand_capacity(&blocks->bbs,
-			  &blocks->bb_capacity,
-			  blocks->bb_count,
-			  "basic block");
+                          &blocks->bb_capacity,
+                          blocks->bb_count,
+                          "basic block");
 
   size_t index = blocks->bb_count++;
   blocks->bbs[index] = (Operand) {
@@ -604,9 +604,9 @@ static size_t new_bb(MethodBlocks *blocks, uint32_t val) {
 
 static size_t new_imms(MethodBlocks *blocks, int32_t val) {
   ensure_operand_capacity(&blocks->imms,
-			  &blocks->imm_capacity,
-			  blocks->imm_count,
-			  "immediate");
+                          &blocks->imm_capacity,
+                          blocks->imm_count,
+                          "immediate");
 
   size_t index = blocks->imm_count++;
   blocks->imms[index] = (Operand) {
@@ -618,9 +618,9 @@ static size_t new_imms(MethodBlocks *blocks, int32_t val) {
 
 static size_t new_jimm(MethodBlocks *blocks, Janet val) {
   ensure_operand_capacity(&blocks->imms,
-			  &blocks->imm_capacity,
-			  blocks->imm_count,
-			  "immediate");
+                          &blocks->imm_capacity,
+                          blocks->imm_count,
+                          "immediate");
 
   size_t index = blocks->imm_count++;
   blocks->imms[index] = (Operand) {
@@ -645,33 +645,33 @@ static void compile_bb_bytecode(JittedFunction *jitted, JanetFunction *fn, size_
     // emit phi for each change slot where the input edges can have different values
     for (size_t slot_i = 0; slot_i < def->slotcount; slot_i++) {
       if (!blocks->blocks[block_id].live_in[slot_i]) {
-	continue;
+        continue;
       }
 
       bool found_difference = false;
       for (size_t edge_i = 1; edge_i < blocks->blocks[block_id].input_edge_count; edge_i++) {
-	size_t input_block_id = blocks->blocks[block_id].input_edges[edge_i].basic_block_id;
-	if (blocks->blocks[input_block_id].slot_map[slot_i] != blocks->blocks[blocks->blocks[block_id].input_edges[0].basic_block_id].slot_map[slot_i]) {
-	  found_difference = true;
-	}
+        size_t input_block_id = blocks->blocks[block_id].input_edges[edge_i].basic_block_id;
+        if (blocks->blocks[input_block_id].slot_map[slot_i] != blocks->blocks[blocks->blocks[block_id].input_edges[0].basic_block_id].slot_map[slot_i]) {
+          found_difference = true;
+        }
       }
 
       if (found_difference) {
-	Instruction *instruction = add_instruction(blocks, block_id, HIR_PHI_PLACEHOLDER);
-	instruction->phi_source_count = blocks->blocks[block_id].input_edge_count;
-	instruction->phi_source_capacity = blocks->blocks[block_id].input_edge_count;
-	instruction->phi_sources = malloc(blocks->blocks[block_id].input_edge_count * sizeof(PhiSource));
+        Instruction *instruction = add_instruction(blocks, block_id, HIR_PHI_PLACEHOLDER);
+        instruction->phi_source_count = blocks->blocks[block_id].input_edge_count;
+        instruction->phi_source_capacity = blocks->blocks[block_id].input_edge_count;
+        instruction->phi_sources = malloc(blocks->blocks[block_id].input_edge_count * sizeof(PhiSource));
 
-	for (size_t edge_i = 0; edge_i < blocks->blocks[block_id].input_edge_count; edge_i++) {
-	  size_t input_block_id = blocks->blocks[block_id].input_edges[edge_i].basic_block_id;
+        for (size_t edge_i = 0; edge_i < blocks->blocks[block_id].input_edge_count; edge_i++) {
+          size_t input_block_id = blocks->blocks[block_id].input_edges[edge_i].basic_block_id;
 
-	  instruction->phi_sources[edge_i].bb = input_block_id;
-	  instruction->phi_sources[edge_i].virtual_register = blocks->blocks[input_block_id].slot_map[slot_i];
-	  instruction->phi_sources[edge_i].slot = slot_i;
-	}
+          instruction->phi_sources[edge_i].bb = input_block_id;
+          instruction->phi_sources[edge_i].virtual_register = blocks->blocks[input_block_id].slot_map[slot_i];
+          instruction->phi_sources[edge_i].slot = slot_i;
+        }
 
-	instruction->result = new_vreg(blocks);
-	slot_map[slot_i] = instruction->result;
+        instruction->result = new_vreg(blocks);
+        slot_map[slot_i] = instruction->result;
       }
     }
   }
@@ -1206,9 +1206,9 @@ static uint8_t instruction_vreg_args(InstructionType type) {
 }
 
 static void replace_virtual_register(MethodBlocks *blocks,
-				     size_t slotcount,
-				     size_t old_vreg,
-				     size_t new_vreg) {
+                                     size_t slotcount,
+                                     size_t old_vreg,
+                                     size_t new_vreg) {
   if (old_vreg == new_vreg) {
     return;
   }
@@ -1218,7 +1218,7 @@ static void replace_virtual_register(MethodBlocks *blocks,
 
     for (size_t slot_i = 0; slot_i < slotcount; slot_i++) {
       if (block->slot_map[slot_i] == old_vreg) {
-	block->slot_map[slot_i] = new_vreg;
+        block->slot_map[slot_i] = new_vreg;
       }
     }
 
@@ -1227,22 +1227,22 @@ static void replace_virtual_register(MethodBlocks *blocks,
       uint8_t vreg_args = instruction_vreg_args(instr->type);
 
       for (size_t arg_i = 0; arg_i < 3; arg_i++) {
-	if ((vreg_args & (1u << arg_i)) &&
-	    instr->args[arg_i] == old_vreg) {
-	  instr->args[arg_i] = new_vreg;
-	}
+        if ((vreg_args & (1u << arg_i)) &&
+            instr->args[arg_i] == old_vreg) {
+          instr->args[arg_i] = new_vreg;
+        }
       }
 
       if (instr->type == HIR_PHI ||
-	  instr->type == HIR_PHI_PLACEHOLDER) {
-	for (size_t source_i = 0;
-	     source_i < instr->phi_source_count;
-	     source_i++) {
-	  PhiSource *source = &instr->phi_sources[source_i];
-	  if (source->virtual_register == old_vreg) {
-	    source->virtual_register = new_vreg;
-	  }
-	}
+          instr->type == HIR_PHI_PLACEHOLDER) {
+        for (size_t source_i = 0;
+             source_i < instr->phi_source_count;
+             source_i++) {
+          PhiSource *source = &instr->phi_sources[source_i];
+          if (source->virtual_register == old_vreg) {
+            source->virtual_register = new_vreg;
+          }
+        }
       }
     }
   }
@@ -1283,7 +1283,7 @@ void build_basic_blocks(JittedFunction *jitted, JanetFunction *fn) {
     if (leaders[pc]) {
       blocks->block_start_pcs[pc] = new_basic_block(blocks, fn->def->slotcount, pc);
       if (cur_block >= 0) {
-	blocks->blocks[cur_block].finish_pc = pc;
+        blocks->blocks[cur_block].finish_pc = pc;
       }
       cur_block = blocks->block_start_pcs[pc];
     }
@@ -1329,7 +1329,7 @@ void build_basic_blocks(JittedFunction *jitted, JanetFunction *fn) {
       case JOP_NOOP:
       case JOP_RETURN_NIL:
       case JOP_JUMP:
-	break;
+        break;
       case JOP_ERROR:
       case JOP_TYPECHECK:
       case JOP_JUMP_IF:
@@ -1337,14 +1337,14 @@ void build_basic_blocks(JittedFunction *jitted, JanetFunction *fn) {
       case JOP_JUMP_IF_NIL:
       case JOP_JUMP_IF_NOT_NIL:
       case JOP_SET_UPVALUE:
-	add_slot_use(block, AA);
-	break;
+        add_slot_use(block, AA);
+        break;
       case JOP_RETURN:
       case JOP_PUSH:
       case JOP_PUSH_ARRAY:
       case JOP_TAILCALL:
-	add_slot_use(block, DD);
-	break;
+        add_slot_use(block, DD);
+        break;
       case JOP_LOAD_NIL:
       case JOP_LOAD_TRUE:
       case JOP_LOAD_FALSE:
@@ -1356,43 +1356,43 @@ void build_basic_blocks(JittedFunction *jitted, JanetFunction *fn) {
       case JOP_MAKE_TABLE:
       case JOP_MAKE_TUPLE:
       case JOP_MAKE_BRACKET_TUPLE:
-	add_slot_def(block, DD);
-	break;
+        add_slot_def(block, DD);
+        break;
       case JOP_LOAD_INTEGER:
       case JOP_LOAD_CONSTANT:
       case JOP_LOAD_UPVALUE:
       case JOP_CLOSURE:
-	add_slot_def(block, AA);
-	break;
+        add_slot_def(block, AA);
+        break;
       case JOP_MOVE_FAR:
-	add_slot_use(block, AA);
-	add_slot_def(block, EE);
-	break;
+        add_slot_use(block, AA);
+        add_slot_def(block, EE);
+        break;
       case JOP_MOVE_NEAR:
       case JOP_BNOT:
       case JOP_LENGTH:
       case JOP_CALL:
-	add_slot_use(block, EE);
-	add_slot_def(block, AA);
-	break;
+        add_slot_use(block, EE);
+        add_slot_def(block, AA);
+        break;
       case JOP_PUSH_2:
-	add_slot_use(block, AA);
-	add_slot_use(block, EE);
-	break;
+        add_slot_use(block, AA);
+        add_slot_use(block, EE);
+        break;
       case JOP_PUSH_3:
       case JOP_PUT:
-	add_slot_use(block, AA);
-	add_slot_use(block, BB);
-	add_slot_use(block, CC);
-	break;
+        add_slot_use(block, AA);
+        add_slot_use(block, BB);
+        add_slot_use(block, CC);
+        break;
       case JOP_PUT_INDEX:
-	add_slot_use(block, AA);
-	add_slot_use(block, BB);
-	break;
+        add_slot_use(block, AA);
+        add_slot_use(block, BB);
+        break;
       case JOP_SIGNAL:
-	add_slot_use(block, BB);
-	add_slot_def(block, AA);
-	break;
+        add_slot_use(block, BB);
+        add_slot_def(block, AA);
+        break;
       case JOP_ADD_IMMEDIATE:
       case JOP_SUBTRACT_IMMEDIATE:
       case JOP_MULTIPLY_IMMEDIATE:
@@ -1405,9 +1405,9 @@ void build_basic_blocks(JittedFunction *jitted, JanetFunction *fn) {
       case JOP_EQUALS_IMMEDIATE:
       case JOP_NOT_EQUALS_IMMEDIATE:
       case JOP_GET_INDEX:
-	add_slot_use(block, BB);
-	add_slot_def(block, AA);
-	break;
+        add_slot_use(block, BB);
+        add_slot_def(block, AA);
+        break;
       case JOP_ADD:
       case JOP_SUBTRACT:
       case JOP_MULTIPLY:
@@ -1434,12 +1434,12 @@ void build_basic_blocks(JittedFunction *jitted, JanetFunction *fn) {
       case JOP_NOT_EQUALS:
       case JOP_CANCEL:
       case JOP_RESUME:
-	add_slot_use(block, BB);
-	add_slot_use(block, CC);
-	add_slot_def(block, AA);
-	break;
+        add_slot_use(block, BB);
+        add_slot_use(block, CC);
+        add_slot_def(block, AA);
+        break;
       default:
-	janet_panicf("unsupported opcode in liveness analysis: %d", instr & 0x7F);
+        janet_panicf("unsupported opcode in liveness analysis: %d", instr & 0x7F);
       }
     }
   }
@@ -1452,23 +1452,23 @@ void build_basic_blocks(JittedFunction *jitted, JanetFunction *fn) {
       BasicBlock *block = &blocks->blocks[block_i];
 
       for (size_t slot_i = 0; slot_i < fn->def->slotcount; slot_i++) {
-	bool live_out = false;
-	for (size_t edge_i = 0; edge_i < block->output_edge_count; edge_i++) {
-	  size_t successor_id = block->output_edges[edge_i].basic_block_id;
-	  if (blocks->blocks[successor_id].live_in[slot_i]) {
-	    live_out = true;
-	    break;
-	  }
-	}
+        bool live_out = false;
+        for (size_t edge_i = 0; edge_i < block->output_edge_count; edge_i++) {
+          size_t successor_id = block->output_edges[edge_i].basic_block_id;
+          if (blocks->blocks[successor_id].live_in[slot_i]) {
+            live_out = true;
+            break;
+          }
+        }
 
-	bool live_in = block->slot_use[slot_i] ||
-	  (live_out && !block->slot_def[slot_i]);
-	if (block->live_out[slot_i] != live_out ||
-	    block->live_in[slot_i] != live_in) {
-	  block->live_out[slot_i] = live_out;
-	  block->live_in[slot_i] = live_in;
-	  changed = true;
-	}
+        bool live_in = block->slot_use[slot_i] ||
+          (live_out && !block->slot_def[slot_i]);
+        if (block->live_out[slot_i] != live_out ||
+            block->live_in[slot_i] != live_in) {
+          block->live_out[slot_i] = live_out;
+          block->live_in[slot_i] = live_in;
+          changed = true;
+        }
       }
     }
   }
@@ -1506,54 +1506,54 @@ void build_basic_blocks(JittedFunction *jitted, JanetFunction *fn) {
     for (size_t block_i = 0; block_i < blocks->count; block_i++) {
       BasicBlock *block = &blocks->blocks[block_i];
       for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
-	Instruction *instr = &block->instructions[instr_i];
-	if (instr->type == HIR_PHI_PLACEHOLDER) {
-	  instr->type = HIR_PHI;
-	  for (size_t i = 0; i < instr->phi_source_count; i++) {
-	    PhiSource *source = &instr->phi_sources[i];
-	    size_t slot_i = source->slot;
-	    size_t bb_i = source->bb;
+        Instruction *instr = &block->instructions[instr_i];
+        if (instr->type == HIR_PHI_PLACEHOLDER) {
+          instr->type = HIR_PHI;
+          for (size_t i = 0; i < instr->phi_source_count; i++) {
+            PhiSource *source = &instr->phi_sources[i];
+            size_t slot_i = source->slot;
+            size_t bb_i = source->bb;
 
-	    if (blocks->blocks[bb_i].slot_map[slot_i] == UINT32_MAX) {
-	      janet_panic("should be unreachable (unresolved live phi made it here)");
-	    }
-	    source->virtual_register = blocks->blocks[bb_i].slot_map[slot_i];
-	  }
-	}
+            if (blocks->blocks[bb_i].slot_map[slot_i] == UINT32_MAX) {
+              janet_panic("should be unreachable (unresolved live phi made it here)");
+            }
+            source->virtual_register = blocks->blocks[bb_i].slot_map[slot_i];
+          }
+        }
 
-	if (instr->type == HIR_PHI) {
-	  bool found_source = false;
-	  bool needs_phi = false;
-	  size_t replacement = 0;
-	  for (size_t i = 0; i < instr->phi_source_count; i++) {
-	    PhiSource *source = &instr->phi_sources[i];
+        if (instr->type == HIR_PHI) {
+          bool found_source = false;
+          bool needs_phi = false;
+          size_t replacement = 0;
+          for (size_t i = 0; i < instr->phi_source_count; i++) {
+            PhiSource *source = &instr->phi_sources[i];
 
-	    if (source->virtual_register == instr->result) {
-	      continue;
-	    }
+            if (source->virtual_register == instr->result) {
+              continue;
+            }
 
-	    if (!found_source) {
-	      found_source = true;
-	      replacement = source->virtual_register;
-	    } else if (source->virtual_register != replacement) {
-	      needs_phi = true;
-	      break;
-	    }
-	  }
+            if (!found_source) {
+              found_source = true;
+              replacement = source->virtual_register;
+            } else if (source->virtual_register != replacement) {
+              needs_phi = true;
+              break;
+            }
+          }
 
-	  if (!found_source) {
-	    instr->type = HIR_NOOP;
-	  } else if (!needs_phi) {
-	    size_t old_result = instr->result;
-	    instr->type = HIR_NOOP;
-	    instr->result = 0;
-	    replace_virtual_register(blocks,
-				     fn->def->slotcount,
-				     old_result,
-				     replacement);
-	    changed = true;
-	  }
-	}
+          if (!found_source) {
+            instr->type = HIR_NOOP;
+          } else if (!needs_phi) {
+            size_t old_result = instr->result;
+            instr->type = HIR_NOOP;
+            instr->result = 0;
+            replace_virtual_register(blocks,
+                                     fn->def->slotcount,
+                                     old_result,
+                                     replacement);
+            changed = true;
+          }
+        }
       }
     }
   }
@@ -1602,142 +1602,142 @@ void type_flow(MethodBlocks *blocks, int32_t argc, Janet *argv) {
     for (size_t block_i = 0; block_i < blocks->count; block_i++) {
       BasicBlock *block = &blocks->blocks[block_i];
       for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
-	Instruction *instr = &block->instructions[instr_i];
-	switch (instr->type) {
-	case HIR_NOOP:
-	case HIR_ERROR:
-	case HIR_RETURN:
-	case HIR_RETURN_NIL:
-	case HIR_JUMP:
-	case HIR_JUMP_IF:
-	case HIR_JUMP_IF_NOT:
-	case HIR_JUMP_IF_NIL:
-	case HIR_JUMP_IF_NOT_NIL:
-	case HIR_TAIL_CALL:
-	case HIR_PUT:
-	case HIR_PUT_INDEX:
-	case HIR_PUSH:
-	case HIR_PUSH2:
-	case HIR_PUSH3:
-	  // noop
-	  break;
-	case HIR_TYPECHECK:
-	  // TODO: I can use this data, but I am ignoring it for now.
-	  break;
-	case HIR_ADD:
-	case HIR_SUB:
-	case HIR_MUL:
-	case HIR_DIV:
-	case HIR_DIV_FLOOR:
-	case HIR_MODULO:
-	case HIR_REMAINDER:
-	case HIR_AND:
-	case HIR_OR:
-	case HIR_XOR:
-	case HIR_LSHIFT:
-	case HIR_RSHIFT:
-	case HIR_RUSHIFT: {
-	  uint32_t lhs = operand_type(blocks, &blocks->vregs[instr->args[0]]);
-	  uint32_t rhs = operand_type(blocks, &blocks->vregs[instr->args[1]]);
-	  if (lhs == 0 || rhs == 0) {
-	    // too early to know
-	  } else if (lhs == JANET_TFLAG_NUMBER && rhs == JANET_TFLAG_NUMBER) {
-	    add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
-	  } else {
-	    add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
-	  }
-	  break;
-	}
-	case HIR_ADD_IMM:
-	case HIR_SUB_IMM:
-	case HIR_MUL_IMM:
-	case HIR_DIV_IMM:
-	case HIR_LSHIFT_IMM:
-	case HIR_RSHIFT_IMM:
-	case HIR_RUSHIFT_IMM: {
-	  uint32_t lhs = operand_type(blocks, &blocks->vregs[instr->args[0]]);
-	  if (lhs == 0) {
-	    // too early to know
-	  } else if (lhs == JANET_TFLAG_NUMBER) {
-	    add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
-	  } else {
-	    add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
-	  }
-	  break;
-	}
-	case HIR_NOT: {
-	  // op1 is alwasy a virtual register.
-	  uint32_t val = operand_type(blocks, &blocks->vregs[instr->args[0]]);
-	  if (val == 0) {
-	    // too early to know
-	  } else if (val == JANET_TFLAG_NUMBER) {
-	    add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
-	  } else {
-	    add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
-	  }
-	  break;
-	}
-	case HIR_COMPARE:
-	  add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
-	  break;
-	case HIR_GREATER_THAN:
-	case HIR_LESS_THAN:
-	case HIR_EQUALS:
-	case HIR_GREATER_THAN_IMM:
-	case HIR_LESS_THAN_IMM:
-	case HIR_EQUALS_IMM:
-	case HIR_GREATER_THAN_EQUAL:
-	case HIR_LESS_THAN_EQUAL:
-	case HIR_NOT_EQUALS:
-	  add_type(blocks, instr->result, JANET_TFLAG_BOOLEAN, &changed);
-	  break;
-	case HIR_LOAD:
-	  add_type(blocks, instr->result, operand_type(blocks, &blocks->imms[instr->args[0]]), &changed);
-	  break;
-	case HIR_LOAD_ARG:
-	  add_type(blocks, instr->result, 1u << janet_type(argv[blocks->imms[instr->args[0]].immus]), &changed);
-	  break;
-	case HIR_CALL:
-	case HIR_IN:
-	case HIR_GET:
-	case HIR_GET_INDEX:
-	case HIR_NEXT:
-	  add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
-	  break;
-	case HIR_LENGTH:
-	  add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
-	  break;
-	case HIR_MAKE_ARRAY:
-	  add_type(blocks, instr->result, JANET_TFLAG_ARRAY, &changed);
-	  break;
-	case HIR_MAKE_BUFFER:
-	  add_type(blocks, instr->result, JANET_TFLAG_BUFFER, &changed);
-	  break;
-	case HIR_MAKE_STRING:
-	  add_type(blocks, instr->result, JANET_TFLAG_STRING, &changed);
-	  break;
-	case HIR_MAKE_STRUCT:
-	  add_type(blocks, instr->result, JANET_TFLAG_STRUCT, &changed);
-	  break;
-	case HIR_MAKE_TABLE:
-	  add_type(blocks, instr->result, JANET_TFLAG_TABLE, &changed);
-	  break;
-	case HIR_MAKE_TUPLE:
-	case HIR_MAKE_BRACKET_TUPLE:
-	  add_type(blocks, instr->result, JANET_TFLAG_TUPLE, &changed);
-	  break;
-	case HIR_PHI: {
-	  for (size_t i = 0; i < instr->phi_source_count; i++) {
-	    PhiSource *source = &instr->phi_sources[i];
-	    add_type(blocks, instr->result, blocks->virtual_register_types[source->virtual_register], &changed);
-	  }
-	  break;
-	}
-	case HIR_PHI_PLACEHOLDER:
-	  // TODO: assert unreachable
-	  /* assert(false); */
-	  break;
-	}
+        Instruction *instr = &block->instructions[instr_i];
+        switch (instr->type) {
+        case HIR_NOOP:
+        case HIR_ERROR:
+        case HIR_RETURN:
+        case HIR_RETURN_NIL:
+        case HIR_JUMP:
+        case HIR_JUMP_IF:
+        case HIR_JUMP_IF_NOT:
+        case HIR_JUMP_IF_NIL:
+        case HIR_JUMP_IF_NOT_NIL:
+        case HIR_TAIL_CALL:
+        case HIR_PUT:
+        case HIR_PUT_INDEX:
+        case HIR_PUSH:
+        case HIR_PUSH2:
+        case HIR_PUSH3:
+          // noop
+          break;
+        case HIR_TYPECHECK:
+          // TODO: I can use this data, but I am ignoring it for now.
+          break;
+        case HIR_ADD:
+        case HIR_SUB:
+        case HIR_MUL:
+        case HIR_DIV:
+        case HIR_DIV_FLOOR:
+        case HIR_MODULO:
+        case HIR_REMAINDER:
+        case HIR_AND:
+        case HIR_OR:
+        case HIR_XOR:
+        case HIR_LSHIFT:
+        case HIR_RSHIFT:
+        case HIR_RUSHIFT: {
+          uint32_t lhs = operand_type(blocks, &blocks->vregs[instr->args[0]]);
+          uint32_t rhs = operand_type(blocks, &blocks->vregs[instr->args[1]]);
+          if (lhs == 0 || rhs == 0) {
+            // too early to know
+          } else if (lhs == JANET_TFLAG_NUMBER && rhs == JANET_TFLAG_NUMBER) {
+            add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
+          } else {
+            add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
+          }
+          break;
+        }
+        case HIR_ADD_IMM:
+        case HIR_SUB_IMM:
+        case HIR_MUL_IMM:
+        case HIR_DIV_IMM:
+        case HIR_LSHIFT_IMM:
+        case HIR_RSHIFT_IMM:
+        case HIR_RUSHIFT_IMM: {
+          uint32_t lhs = operand_type(blocks, &blocks->vregs[instr->args[0]]);
+          if (lhs == 0) {
+            // too early to know
+          } else if (lhs == JANET_TFLAG_NUMBER) {
+            add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
+          } else {
+            add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
+          }
+          break;
+        }
+        case HIR_NOT: {
+          // op1 is alwasy a virtual register.
+          uint32_t val = operand_type(blocks, &blocks->vregs[instr->args[0]]);
+          if (val == 0) {
+            // too early to know
+          } else if (val == JANET_TFLAG_NUMBER) {
+            add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
+          } else {
+            add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
+          }
+          break;
+        }
+        case HIR_COMPARE:
+          add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
+          break;
+        case HIR_GREATER_THAN:
+        case HIR_LESS_THAN:
+        case HIR_EQUALS:
+        case HIR_GREATER_THAN_IMM:
+        case HIR_LESS_THAN_IMM:
+        case HIR_EQUALS_IMM:
+        case HIR_GREATER_THAN_EQUAL:
+        case HIR_LESS_THAN_EQUAL:
+        case HIR_NOT_EQUALS:
+          add_type(blocks, instr->result, JANET_TFLAG_BOOLEAN, &changed);
+          break;
+        case HIR_LOAD:
+          add_type(blocks, instr->result, operand_type(blocks, &blocks->imms[instr->args[0]]), &changed);
+          break;
+        case HIR_LOAD_ARG:
+          add_type(blocks, instr->result, 1u << janet_type(argv[blocks->imms[instr->args[0]].immus]), &changed);
+          break;
+        case HIR_CALL:
+        case HIR_IN:
+        case HIR_GET:
+        case HIR_GET_INDEX:
+        case HIR_NEXT:
+          add_type(blocks, instr->result, JIT_JANET_TFLAG_ANY, &changed);
+          break;
+        case HIR_LENGTH:
+          add_type(blocks, instr->result, JANET_TFLAG_NUMBER, &changed);
+          break;
+        case HIR_MAKE_ARRAY:
+          add_type(blocks, instr->result, JANET_TFLAG_ARRAY, &changed);
+          break;
+        case HIR_MAKE_BUFFER:
+          add_type(blocks, instr->result, JANET_TFLAG_BUFFER, &changed);
+          break;
+        case HIR_MAKE_STRING:
+          add_type(blocks, instr->result, JANET_TFLAG_STRING, &changed);
+          break;
+        case HIR_MAKE_STRUCT:
+          add_type(blocks, instr->result, JANET_TFLAG_STRUCT, &changed);
+          break;
+        case HIR_MAKE_TABLE:
+          add_type(blocks, instr->result, JANET_TFLAG_TABLE, &changed);
+          break;
+        case HIR_MAKE_TUPLE:
+        case HIR_MAKE_BRACKET_TUPLE:
+          add_type(blocks, instr->result, JANET_TFLAG_TUPLE, &changed);
+          break;
+        case HIR_PHI: {
+          for (size_t i = 0; i < instr->phi_source_count; i++) {
+            PhiSource *source = &instr->phi_sources[i];
+            add_type(blocks, instr->result, blocks->virtual_register_types[source->virtual_register], &changed);
+          }
+          break;
+        }
+        case HIR_PHI_PLACEHOLDER:
+          // TODO: assert unreachable
+          /* assert(false); */
+          break;
+        }
       }
     }
   }
@@ -1798,26 +1798,26 @@ static void register_allocate(MethodBlocks *blocks) {
       }
 
       if (instr->type == HIR_PHI) {
-	for (size_t source_i = 0; source_i < instr->phi_source_count; source_i++) {
+        for (size_t source_i = 0; source_i < instr->phi_source_count; source_i++) {
           PhiSource *source = &instr->phi_sources[source_i];
-	  size_t vreg = source->virtual_register;
+          size_t vreg = source->virtual_register;
           BasicBlock *source_block = &blocks->blocks[source->bb];
           size_t use_location =
             source_block->instructions[source_block->count - 1].id;
-	  if (vreg_last_uses[vreg] < use_location) {
+          if (vreg_last_uses[vreg] < use_location) {
             vreg_last_uses[vreg] = use_location;
           }
-	}
+        }
       } else {
-	uint8_t vreg_args = instruction_vreg_args(instr->type);
-	for (size_t arg_i = 0; arg_i < 3; arg_i++) {
-	  if ((vreg_args & (1u << arg_i))) {
-	    size_t vreg = instr->args[arg_i];
-	    if (vreg_last_uses[vreg] < instruction_location) {
+        uint8_t vreg_args = instruction_vreg_args(instr->type);
+        for (size_t arg_i = 0; arg_i < 3; arg_i++) {
+          if ((vreg_args & (1u << arg_i))) {
+            size_t vreg = instr->args[arg_i];
+            if (vreg_last_uses[vreg] < instruction_location) {
               vreg_last_uses[vreg] = instruction_location;
             }
-	  }
-	}
+          }
+        }
       }
     }
   }
@@ -1875,31 +1875,31 @@ static void register_allocate(MethodBlocks *blocks) {
       instruction_location = block->instructions[instr_i].id;
       /* printf("%zu. ", instruction_location); */
       for (size_t vreg_i = 0; vreg_i < blocks->vreg_count; vreg_i++) {
-	if (vreg_defined[vreg_i] &&
+        if (vreg_defined[vreg_i] &&
             instruction_location == vreg_last_uses[vreg_i] &&
             blocks->vregs[vreg_i].physical_location.on_stack == false) {
-	  register_free[blocks->vregs[vreg_i].physical_location.reg - 3] = true;
-	}
-	if (vreg_defined[vreg_i] &&
+          register_free[blocks->vregs[vreg_i].physical_location.reg - 3] = true;
+        }
+        if (vreg_defined[vreg_i] &&
             vreg_defs[vreg_i] < vreg_last_uses[vreg_i] &&
             instruction_location == vreg_defs[vreg_i]) {
-	  if (blocks->vregs[vreg_i].physical_location.on_stack) {
-	    for (size_t i = 0; i < available_registers; i++) {
-	      if (register_free[i]) {
-		register_free[i] = false;
-		blocks->vregs[vreg_i].physical_location.on_stack = false;
-		blocks->vregs[vreg_i].physical_location.reg = i + 3;
-		i = available_registers;
-	      }
-	    }
-	  }
-	}
+          if (blocks->vregs[vreg_i].physical_location.on_stack) {
+            for (size_t i = 0; i < available_registers; i++) {
+              if (register_free[i]) {
+                register_free[i] = false;
+                blocks->vregs[vreg_i].physical_location.on_stack = false;
+                blocks->vregs[vreg_i].physical_location.reg = i + 3;
+                i = available_registers;
+              }
+            }
+          }
+        }
 
-	/* if (vreg_defined[vreg_i] && */
+        /* if (vreg_defined[vreg_i] && */
         /*     instruction_location >= vreg_defs[vreg_i] && */
         /*     instruction_location <= vreg_last_uses[vreg_i]) { */
-	/*   printf("V%zu, ", vreg_i); */
-	/* } */
+        /*   printf("V%zu, ", vreg_i); */
+        /* } */
       }
       /* printf("\n"); */
     }
@@ -2057,8 +2057,8 @@ void print_ops(MethodBlocks *blocks, Operand *op) {
 }
 
 static Operand *instruction_arg(MethodBlocks *blocks,
-				Instruction *instr,
-				size_t arg_i) {
+                                Instruction *instr,
+                                size_t arg_i) {
   InstructionArgs args = instruction_args(instr->type);
   uint8_t arg_mask = 1u << arg_i;
 
@@ -2083,25 +2083,25 @@ void print_basic_blocks(MethodBlocks *blocks) {
       Instruction *instruction = &bb->instructions[instr_i];
       printf("%zu. ", instr_i);
       if (instruction->result != 0) {
-	print_ops(blocks, &blocks->vregs[instruction->result]);
-	printf(" = ");
+        print_ops(blocks, &blocks->vregs[instruction->result]);
+        printf(" = ");
       }
       printf("%s [", instruction_names[instruction->type]);
       if (instruction->type == HIR_PHI) {
-	print_ops(blocks, &blocks->vregs[instruction->result]);
-	for (size_t i = 0; i < instruction->phi_source_count; i++) {
-	  if (i > 0) {
-	    printf(", ");
-	  }
-	  printf("(bb%zu: v%zu) ", instruction->phi_sources[i].bb, instruction->phi_sources[i].virtual_register);
-	}
+        print_ops(blocks, &blocks->vregs[instruction->result]);
+        for (size_t i = 0; i < instruction->phi_source_count; i++) {
+          if (i > 0) {
+            printf(", ");
+          }
+          printf("(bb%zu: v%zu) ", instruction->phi_sources[i].bb, instruction->phi_sources[i].virtual_register);
+        }
       } else {
-	for (size_t arg_i = 0; arg_i < 3; arg_i++) {
-	  if (arg_i > 0) {
-	    printf(", ");
-	  }
-	  print_ops(blocks, instruction_arg(blocks, instruction, arg_i));
-	}
+        for (size_t arg_i = 0; arg_i < 3; arg_i++) {
+          if (arg_i > 0) {
+            printf(", ");
+          }
+          print_ops(blocks, instruction_arg(blocks, instruction, arg_i));
+        }
       }
       printf("] \n");
 
@@ -2448,7 +2448,7 @@ static void emit_byte(CodeBuffer *code, uint8_t byte) {
       code->capacity *= 2;
       code->data = realloc(code->data, code->capacity * sizeof(uint8_t));
       if (code->data == NULL) {
-	janet_panic("JIT could not allocate while generating bytecode");
+        janet_panic("JIT could not allocate while generating bytecode");
       }
     } else {
       janet_panic("JIT ran out of memory generating bytecode");
@@ -2578,25 +2578,25 @@ static void emit_imm_gpr(CodeBuffer *code, uint32_t destination, uint64_t val) {
 static void emit_gpr_to_xmm(CodeBuffer *code, uint32_t destination, uint32_t source) {
   emit_byte(code, 0x66);
   emit_byte(code, 0x48 |
-	    ((destination & 8) ? 0x04 : 0) |
-	    ((source & 8) ? 0x01 : 0));
+            ((destination & 8) ? 0x04 : 0) |
+            ((source & 8) ? 0x01 : 0));
   emit_byte(code, 0x0F);
   emit_byte(code, 0x6E);
   emit_byte(code, 0xC0 |
-	    ((destination & 7) << 3) |
-	    (source & 7));
+            ((destination & 7) << 3) |
+            (source & 7));
 }
 
 static void emit_xmm_to_gpr(CodeBuffer *code, uint32_t destination, uint32_t source) {
   emit_byte(code, 0x66);
   emit_byte(code, 0x48 |
-	    ((source & 8) ? 0x04 : 0) |
-	    ((destination & 8) ? 0x01 : 0));
+            ((source & 8) ? 0x04 : 0) |
+            ((destination & 8) ? 0x01 : 0));
   emit_byte(code, 0x0F);
   emit_byte(code, 0x7E);
   emit_byte(code, 0xC0 |
-	    ((source & 7) << 3) |
-	    (destination & 7));
+            ((source & 7) << 3) |
+            (destination & 7));
 }
 
 static uint64_t operand_to_janet_bits(Operand *operand) {
@@ -2766,25 +2766,25 @@ static void emit_ucomisd(CodeBuffer *code, uint32_t lhs, uint32_t rhs) {
   emit_byte(code, 0x66);
   if ((lhs | rhs) & 8) {
     emit_byte(code, 0x40 |
-	      ((lhs & 8) ? 0x04 : 0) |
-	      ((rhs & 8) ? 0x01 : 0));
+              ((lhs & 8) ? 0x04 : 0) |
+              ((rhs & 8) ? 0x01 : 0));
   }
   emit_byte(code, 0x0F);
   emit_byte(code, 0x2E);
   emit_byte(code, 0xC0 |
-	    ((lhs & 7) << 3) |
-	    (rhs & 7));
+            ((lhs & 7) << 3) |
+            (rhs & 7));
 }
 
 static void emit_cmov(CodeBuffer *code, uint8_t condition, uint32_t destination, uint32_t source) {
   emit_byte(code, 0x48 |
-	    ((destination & 8) ? 0x04 : 0) |
-	    ((source & 8) ? 0x01 : 0));
+            ((destination & 8) ? 0x04 : 0) |
+            ((source & 8) ? 0x01 : 0));
   emit_byte(code, 0x0F);
   emit_byte(code, condition);
   emit_byte(code, 0xC0 |
-	    ((destination & 7) << 3) |
-	    (source & 7));
+            ((destination & 7) << 3) |
+            (source & 7));
 }
 
 #define X86_CMOV_BELOW 0x42
@@ -2795,12 +2795,12 @@ static void emit_cmov(CodeBuffer *code, uint8_t condition, uint32_t destination,
 #define X86_CMOV_PARITY 0x4A
 
 static void emit_comparison(CodeBuffer *code,
-			    Operand *lhs,
-			    Operand *rhs,
-			    bool reverse,
-			    uint8_t condition,
-			    int unordered_result,
-			    Operand *destination) {
+                            Operand *lhs,
+                            Operand *rhs,
+                            bool reverse,
+                            uint8_t condition,
+                            int unordered_result,
+                            Operand *destination) {
   emit_op_to_xmm(code, reverse ? 1 : 0, lhs);
   emit_op_to_xmm(code, reverse ? 0 : 1, rhs);
   emit_ucomisd(code, 0, 1);
@@ -2812,10 +2812,10 @@ static void emit_comparison(CodeBuffer *code,
 
   if (unordered_result >= 0) {
     emit_imm_gpr(code,
-		 2,
-		 janet_u64(unordered_result
-			   ? janet_wrap_true()
-			   : janet_wrap_false()));
+                 2,
+                 janet_u64(unordered_result
+                           ? janet_wrap_true()
+                           : janet_wrap_false()));
     emit_cmov(code, X86_CMOV_PARITY, 0, 2);
   }
 
@@ -2846,8 +2846,8 @@ static void emit_trunc(CodeBuffer *code, uint32_t reg) {
 
 static void emit_gpr_op(CodeBuffer *code, uint8_t op, uint32_t lhs, uint32_t rhs) {
   emit_byte(code, 0x48 |
-	    ((rhs & 8) ? 0x04 : 0) |
-	    ((lhs & 8) ? 0x01 : 0));
+            ((rhs & 8) ? 0x04 : 0) |
+            ((lhs & 8) ? 0x01 : 0));
   emit_byte(code, op);
   emit_byte(code, 0xC0 | ((rhs & 7) << 3) | (lhs & 7));
 }
@@ -2878,8 +2878,8 @@ static void emit_gpr_shift(CodeBuffer *code, uint8_t operation, uint32_t destina
   }
   emit_byte(code, 0xD3);
   emit_byte(code, 0xC0 |
-	    ((operation & 7) << 3) |
-	    (destination & 7));
+            ((operation & 7) << 3) |
+            (destination & 7));
 }
 
 static void emit_gpr_shift_immediate(CodeBuffer *code, uint8_t operation, uint32_t destination, uint8_t amount) {
@@ -2888,26 +2888,26 @@ static void emit_gpr_shift_immediate(CodeBuffer *code, uint8_t operation, uint32
   }
   emit_byte(code, 0xC1);
   emit_byte(code, 0xC0 |
-	    ((operation & 7) << 3) |
-	    (destination & 7));
+            ((operation & 7) << 3) |
+            (destination & 7));
   emit_byte(code, amount);
 }
 
 static void emit_sign_extend_gpr_32(CodeBuffer *code, uint32_t reg) {
   emit_byte(code, 0x48 |
-	    ((reg & 8) ? 0x05 : 0));
+            ((reg & 8) ? 0x05 : 0));
   emit_byte(code, 0x63);
   emit_byte(code, 0xC0 |
-	    ((reg & 7) << 3) |
-	    (reg & 7));
+            ((reg & 7) << 3) |
+            (reg & 7));
 }
 
 static void emit_shift(CodeBuffer *code,
-		       uint8_t operation,
-		       bool signed_result,
-		       Operand *destination,
-		       Operand *lhs,
-		       Operand *rhs) {
+                       uint8_t operation,
+                       bool signed_result,
+                       Operand *destination,
+                       Operand *lhs,
+                       Operand *rhs) {
   emit_op_to_integer_gpr(code, 0, lhs);
 
   if (rhs->type == OPERAND_VIRTUAL_REGISTER) {
@@ -2928,9 +2928,9 @@ static void emit_shift(CodeBuffer *code,
 }
 
 static void emit_compare(CodeBuffer *code,
-			 Operand *lhs,
-			 Operand *rhs,
-			 Operand *destination) {
+                         Operand *lhs,
+                         Operand *rhs,
+                         Operand *destination) {
   emit_op_to_xmm(code, 0, lhs);
   emit_op_to_xmm(code, 1, rhs);
   emit_ucomisd(code, 0, 1);
@@ -2988,7 +2988,7 @@ static void emit_cfun_call(CodeBuffer *code, MethodBlocks *blocks, Instruction *
   // spill registers
   for (size_t vreg_i = 0; vreg_i < blocks->vreg_count; vreg_i++) {
     if (blocks->vreg_defs[vreg_i] < instr->id && instr->id < blocks->vreg_last_uses[vreg_i] &&
-	blocks->vregs[vreg_i].physical_location.on_stack == false) {
+        blocks->vregs[vreg_i].physical_location.on_stack == false) {
       emit_spill_vreg(code, &blocks->vregs[vreg_i]);
     }
   }
@@ -3002,7 +3002,7 @@ static void emit_cfun_call(CodeBuffer *code, MethodBlocks *blocks, Instruction *
   // restore registers
   for (size_t vreg_i = 0; vreg_i < blocks->vreg_count; vreg_i++) {
     if (blocks->vreg_defs[vreg_i] < instr->id && instr->id < blocks->vreg_last_uses[vreg_i] &&
-	blocks->vregs[vreg_i].physical_location.on_stack == false) {
+        blocks->vregs[vreg_i].physical_location.on_stack == false) {
       emit_restore_vreg(code, &blocks->vregs[vreg_i]);
     }
   }
@@ -3078,7 +3078,7 @@ static void emit_phi_moves(CodeBuffer *code, MethodBlocks *blocks, uint32_t bb_s
 static void emit_jump_placeholder(CodeBuffer *code, int32_t pc, size_t target_bb) {
   if (code->jump_index >= code->jump_capacity) {
     if (code->jump_capacity > SIZE_MAX / 2 ||
-	code->jump_capacity * 2 > SIZE_MAX / sizeof(size_t)) {
+        code->jump_capacity * 2 > SIZE_MAX / sizeof(size_t)) {
       janet_panic("JIT ran out of memory generating jump placeholders");
     }
 
@@ -3154,10 +3154,10 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     case HIR_RETURN: {
       emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[0]]);
       if (stack_size > 0) {
-	emit_byte(code, 0x48);
-	emit_byte(code, 0x81);
-	emit_byte(code, 0xC4);
-	emit_u32(code, stack_size);
+        emit_byte(code, 0x48);
+        emit_byte(code, 0x81);
+        emit_byte(code, 0xC4);
+        emit_u32(code, stack_size);
       }
       emit_byte(code, 0xC3);
       break;
@@ -3165,261 +3165,261 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     case HIR_RETURN_NIL: {
       emit_imm_gpr(code, 0, blocks->imms[instr->args[0]].immus);
       if (stack_size > 0) {
-	emit_byte(code, 0x48);
-	emit_byte(code, 0x81);
-	emit_byte(code, 0xC4);
-	emit_u32(code, stack_size);
+        emit_byte(code, 0x48);
+        emit_byte(code, 0x81);
+        emit_byte(code, 0xC4);
+        emit_u32(code, stack_size);
       }
       emit_byte(code, 0xC3);
       break;
     }
     case HIR_ADD: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_binary_op_op(code, X86_ADD, &blocks->vregs[instr->result],
-			  &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]]);
+        emit_binary_op_op(code, X86_ADD, &blocks->vregs[instr->result],
+                          &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_add_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_add_fallback);
       }
       break;
     }
     case HIR_ADD_IMM: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
-	emit_binary_op_op(code, X86_ADD, &blocks->vregs[instr->result],
-			  &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
+        emit_binary_op_op(code, X86_ADD, &blocks->vregs[instr->result],
+                          &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_add_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_add_fallback);
       }
       break;
     }
     case HIR_SUB: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_binary_op_op(code, X86_SUB, &blocks->vregs[instr->result],
-			  &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]]);
+        emit_binary_op_op(code, X86_SUB, &blocks->vregs[instr->result],
+                          &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_sub_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_sub_fallback);
       }
       break;
     }
     case HIR_SUB_IMM: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
-	emit_binary_op_op(code, X86_SUB, &blocks->vregs[instr->result],
-			  &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
+        emit_binary_op_op(code, X86_SUB, &blocks->vregs[instr->result],
+                          &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_sub_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_sub_fallback);
       }
       break;
     }
     case HIR_MUL: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_binary_op_op(code, X86_MUL,
-			  &blocks->vregs[instr->result],
-			  &blocks->vregs[instr->args[0]],
-			  &blocks->vregs[instr->args[1]]);
+        emit_binary_op_op(code, X86_MUL,
+                          &blocks->vregs[instr->result],
+                          &blocks->vregs[instr->args[0]],
+                          &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_mul_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_mul_fallback);
       }
       break;
     }
     case HIR_MUL_IMM: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
-	emit_binary_op_op(code, X86_MUL, &blocks->vregs[instr->result],
-			  &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
+        emit_binary_op_op(code, X86_MUL, &blocks->vregs[instr->result],
+                          &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_mul_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_mul_fallback);
       }
       break;
     }
     case HIR_DIV: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_binary_op_op(code, X86_DIV, &blocks->vregs[instr->result],
-			  &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]]);
+        emit_binary_op_op(code, X86_DIV, &blocks->vregs[instr->result],
+                          &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_div_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_div_fallback);
       }
       break;
     }
     case HIR_DIV_IMM: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]])) {
-	emit_binary_op_op(code, X86_DIV, &blocks->vregs[instr->result],
-			  &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
+        emit_binary_op_op(code, X86_DIV, &blocks->vregs[instr->result],
+                          &blocks->vregs[instr->args[0]], &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_div_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_div_fallback);
       }
       break;
     }
     case HIR_DIV_FLOOR: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_op_to_xmm(code, 0, &blocks->vregs[instr->args[0]]);
-	emit_op_to_xmm(code, 1, &blocks->vregs[instr->args[1]]);
-	emit_binary_op(code, X86_DIV, 0, 0, 1);
-	emit_floor(code, 0);
-	emit_xmm_to_op(code, &blocks->vregs[instr->result], 0);
+        emit_op_to_xmm(code, 0, &blocks->vregs[instr->args[0]]);
+        emit_op_to_xmm(code, 1, &blocks->vregs[instr->args[1]]);
+        emit_binary_op(code, X86_DIV, 0, 0, 1);
+        emit_floor(code, 0);
+        emit_xmm_to_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_divf_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_divf_fallback);
       }
       break;
     }
     case HIR_MODULO: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_op_to_xmm(code, 0, &blocks->vregs[instr->args[0]]);
-	emit_op_to_xmm(code, 1, &blocks->vregs[instr->args[0]]);
-	emit_op_to_xmm(code, 2, &blocks->vregs[instr->args[1]]);
-	emit_binary_op(code, X86_DIV, 1, 1, 2);
-	emit_floor(code, 1);
-	emit_binary_op(code, X86_MUL, 1, 1, 2);
-	emit_binary_op(code, X86_SUB, 0, 0, 1);
-	emit_xmm_to_op(code, &blocks->vregs[instr->result], 0);
+        emit_op_to_xmm(code, 0, &blocks->vregs[instr->args[0]]);
+        emit_op_to_xmm(code, 1, &blocks->vregs[instr->args[0]]);
+        emit_op_to_xmm(code, 2, &blocks->vregs[instr->args[1]]);
+        emit_binary_op(code, X86_DIV, 1, 1, 2);
+        emit_floor(code, 1);
+        emit_binary_op(code, X86_MUL, 1, 1, 2);
+        emit_binary_op(code, X86_SUB, 0, 0, 1);
+        emit_xmm_to_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_mod_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_mod_fallback);
       }
       break;
     }
     case HIR_REMAINDER: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_op_to_xmm(code, 0, &blocks->vregs[instr->args[0]]);
-	emit_op_to_xmm(code, 1, &blocks->vregs[instr->args[0]]);
-	emit_op_to_xmm(code, 2, &blocks->vregs[instr->args[1]]);
-	emit_binary_op(code, X86_DIV, 1, 1, 2);
-	emit_trunc(code, 1);
-	emit_binary_op(code, X86_MUL, 1, 1, 2);
-	emit_binary_op(code, X86_SUB, 0, 0, 1);
-	emit_xmm_to_op(code, &blocks->vregs[instr->result], 0);
+        emit_op_to_xmm(code, 0, &blocks->vregs[instr->args[0]]);
+        emit_op_to_xmm(code, 1, &blocks->vregs[instr->args[0]]);
+        emit_op_to_xmm(code, 2, &blocks->vregs[instr->args[1]]);
+        emit_binary_op(code, X86_DIV, 1, 1, 2);
+        emit_trunc(code, 1);
+        emit_binary_op(code, X86_MUL, 1, 1, 2);
+        emit_binary_op(code, X86_SUB, 0, 0, 1);
+        emit_xmm_to_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_rem_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_rem_fallback);
       }
       break;
     }
     case HIR_AND: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	// Should do I do range checks here, or just say, "The jit rolls over"
-	emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
-	emit_op_to_integer_gpr(code, 1, &blocks->vregs[instr->args[1]]);
-	emit_gpr_op(code, X86_AND_GPR, 0, 1);
-	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
+        // Should do I do range checks here, or just say, "The jit rolls over"
+        emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+        emit_op_to_integer_gpr(code, 1, &blocks->vregs[instr->args[1]]);
+        emit_gpr_op(code, X86_AND_GPR, 0, 1);
+        emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_band_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_band_fallback);
       }
       break;
     }
     case HIR_OR: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
-	emit_op_to_integer_gpr(code, 1, &blocks->vregs[instr->args[1]]);
-	emit_gpr_op(code, X86_OR_GPR, 0, 1);
-	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
+        emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+        emit_op_to_integer_gpr(code, 1, &blocks->vregs[instr->args[1]]);
+        emit_gpr_op(code, X86_OR_GPR, 0, 1);
+        emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_bor_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_bor_fallback);
       }
       break;
     }
     case HIR_XOR: {
       if (operands_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]], &blocks->vregs[instr->args[1]])) {
-	emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
-	emit_op_to_integer_gpr(code, 1, &blocks->vregs[instr->args[1]]);
-	emit_gpr_op(code, X86_XOR_GPR, 0, 1);
-	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
+        emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+        emit_op_to_integer_gpr(code, 1, &blocks->vregs[instr->args[1]]);
+        emit_gpr_op(code, X86_XOR_GPR, 0, 1);
+        emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_bxor_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_bxor_fallback);
       }
       break;
     }
     case HIR_NOT: {
       if (operand_numeric(blocks->virtual_register_types, &blocks->vregs[instr->args[0]])) {
-	emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
-	emit_not(code, 0);
-	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
+        emit_op_to_integer_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+        emit_not(code, 0);
+        emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
       } else {
-	emit_unary_fallback(code, blocks, instr, jit_bnot_fallback);
+        emit_unary_fallback(code, blocks, instr, jit_bnot_fallback);
       }
       break;
     }
     case HIR_LSHIFT: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->vregs[instr->args[1]])) {
-	emit_shift(code,
-		   X86_SHIFT_LEFT,
-		   true,
-		   &blocks->vregs[instr->result],
-		   &blocks->vregs[instr->args[0]],
-		   &blocks->vregs[instr->args[1]]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->vregs[instr->args[1]])) {
+        emit_shift(code,
+                   X86_SHIFT_LEFT,
+                   true,
+                   &blocks->vregs[instr->result],
+                   &blocks->vregs[instr->args[0]],
+                   &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_blshift_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_blshift_fallback);
       }
       break;
     }
     case HIR_LSHIFT_IMM: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->imms[instr->args[1]])) {
-	emit_shift(code,
-		   X86_SHIFT_LEFT,
-		   true,
-		   &blocks->vregs[instr->result],
-		   &blocks->vregs[instr->args[0]],
-		   &blocks->imms[instr->args[1]]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->imms[instr->args[1]])) {
+        emit_shift(code,
+                   X86_SHIFT_LEFT,
+                   true,
+                   &blocks->vregs[instr->result],
+                   &blocks->vregs[instr->args[0]],
+                   &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_blshift_fallback);
+        emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_blshift_fallback);
       }
       break;
     }
     case HIR_RSHIFT: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->vregs[instr->args[1]])) {
-	emit_shift(code,
-		   X86_SHIFT_RIGHT_SIGNED,
-		   true,
-		   &blocks->vregs[instr->result],
-		   &blocks->vregs[instr->args[0]],
-		   &blocks->vregs[instr->args[1]]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->vregs[instr->args[1]])) {
+        emit_shift(code,
+                   X86_SHIFT_RIGHT_SIGNED,
+                   true,
+                   &blocks->vregs[instr->result],
+                   &blocks->vregs[instr->args[0]],
+                   &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_brshift_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_brshift_fallback);
       }
       break;
     }
     case HIR_RSHIFT_IMM: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->imms[instr->args[1]])) {
-	emit_shift(code,
-		   X86_SHIFT_RIGHT_SIGNED,
-		   true,
-		   &blocks->vregs[instr->result],
-		   &blocks->vregs[instr->args[0]],
-		   &blocks->imms[instr->args[1]]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->imms[instr->args[1]])) {
+        emit_shift(code,
+                   X86_SHIFT_RIGHT_SIGNED,
+                   true,
+                   &blocks->vregs[instr->result],
+                   &blocks->vregs[instr->args[0]],
+                   &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_brshift_fallback);
+        emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_brshift_fallback);
       }
       break;
     }
     case HIR_RUSHIFT: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->vregs[instr->args[1]])) {
-	emit_shift(code,
-		   X86_SHIFT_RIGHT_UNSIGNED,
-		   false,
-		   &blocks->vregs[instr->result],
-		   &blocks->vregs[instr->args[0]],
-		   &blocks->vregs[instr->args[1]]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->vregs[instr->args[1]])) {
+        emit_shift(code,
+                   X86_SHIFT_RIGHT_UNSIGNED,
+                   false,
+                   &blocks->vregs[instr->result],
+                   &blocks->vregs[instr->args[0]],
+                   &blocks->vregs[instr->args[1]]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_brushift_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_brushift_fallback);
       }
       break;
     }
     case HIR_RUSHIFT_IMM: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->imms[instr->args[1]])) {
-	emit_shift(code,
-		   X86_SHIFT_RIGHT_UNSIGNED,
-		   false,
-		   &blocks->vregs[instr->result],
-		   &blocks->vregs[instr->args[0]],
-		   &blocks->imms[instr->args[1]]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->imms[instr->args[1]])) {
+        emit_shift(code,
+                   X86_SHIFT_RIGHT_UNSIGNED,
+                   false,
+                   &blocks->vregs[instr->result],
+                   &blocks->vregs[instr->args[0]],
+                   &blocks->imms[instr->args[1]]);
       } else {
-	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_brushift_fallback);
+        emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_brushift_fallback);
       }
       break;
     }
@@ -3431,15 +3431,15 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_JUMP_IF: {
       if (operand_type(blocks, &blocks->vregs[instr->args[2]]) == JANET_TFLAG_BOOLEAN) {
-	emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[2]]);
-	emit_byte(code, 0xF6);
-	emit_byte(code, 0xC0);
-	emit_byte(code, 0x01);
+        emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[2]]);
+        emit_byte(code, 0xF6);
+        emit_byte(code, 0xC0);
+        emit_byte(code, 0x01);
       } else {
-	emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
-	emit_cfun_call(code, blocks, instr, janet_truthy);
-	emit_byte(code, 0x85);
-	emit_byte(code, 0xC0);
+        emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
+        emit_cfun_call(code, blocks, instr, janet_truthy);
+        emit_byte(code, 0x85);
+        emit_byte(code, 0xC0);
       }
       // conditional jump
       emit_byte(code, 0x0F);
@@ -3465,16 +3465,16 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_JUMP_IF_NOT: {
       if (operand_type(blocks, &blocks->vregs[instr->args[2]]) == JANET_TFLAG_BOOLEAN) {
-	emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[2]]);
-	emit_byte(code, 0xF6);
-	emit_byte(code, 0xC0);
-	emit_byte(code, 0x01);
+        emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[2]]);
+        emit_byte(code, 0xF6);
+        emit_byte(code, 0xC0);
+        emit_byte(code, 0x01);
       } else {
-	// jump if conditional true to <A>
-	emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
-	emit_cfun_call(code, blocks, instr, janet_truthy);
-	emit_byte(code, 0x85);
-	emit_byte(code, 0xC0);
+        // jump if conditional true to <A>
+        emit_op_to_arg(code, 0, &blocks->vregs[instr->args[2]]);
+        emit_cfun_call(code, blocks, instr, janet_truthy);
+        emit_byte(code, 0x85);
+        emit_byte(code, 0xC0);
       }
       // conditional jump
       emit_byte(code, 0x0F);
@@ -3588,110 +3588,110 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_GREATER_THAN: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->vregs[instr->args[1]])) {
-	emit_comparison(code,
-			&blocks->vregs[instr->args[0]],
-			&blocks->vregs[instr->args[1]],
-			false,
-			X86_CMOV_ABOVE,
-			-1,
-			&blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->vregs[instr->args[1]])) {
+        emit_comparison(code,
+                        &blocks->vregs[instr->args[0]],
+                        &blocks->vregs[instr->args[1]],
+                        false,
+                        X86_CMOV_ABOVE,
+                        -1,
+                        &blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_greater_than_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_greater_than_fallback);
       }
       break;
     }
     case HIR_GREATER_THAN_IMM: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->imms[instr->args[1]])) {
-	emit_comparison(code,
-			&blocks->vregs[instr->args[0]],
-			&blocks->imms[instr->args[1]],
-			false,
-			X86_CMOV_ABOVE,
-			-1,
-			&blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->imms[instr->args[1]])) {
+        emit_comparison(code,
+                        &blocks->vregs[instr->args[0]],
+                        &blocks->imms[instr->args[1]],
+                        false,
+                        X86_CMOV_ABOVE,
+                        -1,
+                        &blocks->vregs[instr->result]);
       } else {
-	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_greater_than_fallback);
+        emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_greater_than_fallback);
       }
       break;
     }
     case HIR_LESS_THAN: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->vregs[instr->args[1]])) {
-	emit_comparison(code,
-			&blocks->vregs[instr->args[0]],
-			&blocks->vregs[instr->args[1]],
-			true,
-			X86_CMOV_ABOVE,
-			-1,
-			&blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->vregs[instr->args[1]])) {
+        emit_comparison(code,
+                        &blocks->vregs[instr->args[0]],
+                        &blocks->vregs[instr->args[1]],
+                        true,
+                        X86_CMOV_ABOVE,
+                        -1,
+                        &blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_less_than_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_less_than_fallback);
       }
       break;
     }
     case HIR_LESS_THAN_IMM: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->imms[instr->args[1]])) {
-	emit_comparison(code,
-			&blocks->vregs[instr->args[0]],
-			&blocks->imms[instr->args[1]],
-			true,
-			X86_CMOV_ABOVE,
-			-1,
-			&blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->imms[instr->args[1]])) {
+        emit_comparison(code,
+                        &blocks->vregs[instr->args[0]],
+                        &blocks->imms[instr->args[1]],
+                        true,
+                        X86_CMOV_ABOVE,
+                        -1,
+                        &blocks->vregs[instr->result]);
       } else {
-	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_less_than_fallback);
+        emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_less_than_fallback);
       }
       break;
     }
     case HIR_EQUALS: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->vregs[instr->args[1]])) {
-	emit_comparison(code,
-			&blocks->vregs[instr->args[0]],
-			&blocks->vregs[instr->args[1]],
-			false,
-			X86_CMOV_EQUAL,
-			false,
-			&blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->vregs[instr->args[1]])) {
+        emit_comparison(code,
+                        &blocks->vregs[instr->args[0]],
+                        &blocks->vregs[instr->args[1]],
+                        false,
+                        X86_CMOV_EQUAL,
+                        false,
+                        &blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_equals_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_equals_fallback);
       }
       break;
     }
     case HIR_EQUALS_IMM: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->imms[instr->args[1]])) {
-	emit_comparison(code,
-			&blocks->vregs[instr->args[0]],
-			&blocks->imms[instr->args[1]],
-			false,
-			X86_CMOV_EQUAL,
-			false,
-			&blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->imms[instr->args[1]])) {
+        emit_comparison(code,
+                        &blocks->vregs[instr->args[0]],
+                        &blocks->imms[instr->args[1]],
+                        false,
+                        X86_CMOV_EQUAL,
+                        false,
+                        &blocks->vregs[instr->result]);
       } else {
-	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_equals_fallback);
+        emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_equals_fallback);
       }
       break;
     }
     case HIR_COMPARE: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->vregs[instr->args[1]])) {
-	emit_compare(code,
-		     &blocks->vregs[instr->args[0]],
-		     &blocks->vregs[instr->args[1]],
-		     &blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->vregs[instr->args[1]])) {
+        emit_compare(code,
+                     &blocks->vregs[instr->args[0]],
+                     &blocks->vregs[instr->args[1]],
+                     &blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_compare_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_compare_fallback);
       }
       break;
     }
@@ -3701,9 +3701,9 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_LOAD_ARG: {
       if (blocks->vregs[instr->result].physical_location.on_stack == false) {
-	emit_arg_to_xmm(code, blocks->imms[instr->args[0]].immus, blocks->vregs[instr->result].physical_location.reg);
+        emit_arg_to_xmm(code, blocks->imms[instr->args[0]].immus, blocks->vregs[instr->result].physical_location.reg);
       } else {
-	emit_arg_to_stack(code, blocks->imms[instr->args[0]].immus, instr->result);
+        emit_arg_to_stack(code, blocks->imms[instr->args[0]].immus, instr->result);
       }
       break;
     }
@@ -3740,11 +3740,11 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       emit_non_janet_to_arg(code, 1, call_args_loc);
       emit_cfun_call(code, blocks, instr, jit_call);
       if (stack_size > 0) {
-	// stack adjust
-	emit_byte(code, 0x48);
-	emit_byte(code, 0x81);
-	emit_byte(code, 0xC4);
-	emit_u32(code, stack_size);
+        // stack adjust
+        emit_byte(code, 0x48);
+        emit_byte(code, 0x81);
+        emit_byte(code, 0xC4);
+        emit_u32(code, stack_size);
       }
       emit_byte(code, 0xC3); // ret
       break;
@@ -3786,49 +3786,49 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_LENGTH: {
       if (operand_type(blocks, &blocks->vregs[instr->args[0]]) == JANET_TFLAG_TUPLE) {
-	emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+        emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[0]]);
 
-	// rax &= JANET_NANBOX_PAYLOADBITS
-	// On the current x86-64 configuration, retain the low 47 payload bits.
-	emit_byte(code, 0x48); // shl rax, 17
-	emit_byte(code, 0xC1);
-	emit_byte(code, 0xE0);
-	emit_byte(code, 17);
+        // rax &= JANET_NANBOX_PAYLOADBITS
+        // On the current x86-64 configuration, retain the low 47 payload bits.
+        emit_byte(code, 0x48); // shl rax, 17
+        emit_byte(code, 0xC1);
+        emit_byte(code, 0xE0);
+        emit_byte(code, 17);
 
-	emit_byte(code, 0x48); // shr rax, 17
-	emit_byte(code, 0xC1);
-	emit_byte(code, 0xE8);
-	emit_byte(code, 17);
+        emit_byte(code, 0x48); // shr rax, 17
+        emit_byte(code, 0xC1);
+        emit_byte(code, 0xE8);
+        emit_byte(code, 17);
 
-	// mov eax, rax + length_offset
-	emit_byte(code, 0x8B);
-	emit_byte(code, 0x80);
-	emit_u32(code, (int32_t)(offsetof(JanetTupleHead, length) - offsetof(JanetTupleHead, data)));
-	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
+        // mov eax, rax + length_offset
+        emit_byte(code, 0x8B);
+        emit_byte(code, 0x80);
+        emit_u32(code, (int32_t)(offsetof(JanetTupleHead, length) - offsetof(JanetTupleHead, data)));
+        emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
       } else if (operand_type(blocks, &blocks->vregs[instr->args[0]]) == JANET_TFLAG_STRING) {
-	emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[0]]);
+        emit_op_to_gpr(code, 0, &blocks->vregs[instr->args[0]]);
 
-	// rax &= JANET_NANBOX_PAYLOADBITS
-	// On the current x86-64 configuration, retain the low 47 payload bits.
-	emit_byte(code, 0x48); // shl rax, 17
-	emit_byte(code, 0xC1);
-	emit_byte(code, 0xE0);
-	emit_byte(code, 17);
+        // rax &= JANET_NANBOX_PAYLOADBITS
+        // On the current x86-64 configuration, retain the low 47 payload bits.
+        emit_byte(code, 0x48); // shl rax, 17
+        emit_byte(code, 0xC1);
+        emit_byte(code, 0xE0);
+        emit_byte(code, 17);
 
-	emit_byte(code, 0x48); // shr rax, 17
-	emit_byte(code, 0xC1);
-	emit_byte(code, 0xE8);
-	emit_byte(code, 17);
+        emit_byte(code, 0x48); // shr rax, 17
+        emit_byte(code, 0xC1);
+        emit_byte(code, 0xE8);
+        emit_byte(code, 17);
 
-	// mov eax, rax + length_offset
-	emit_byte(code, 0x8B);
-	emit_byte(code, 0x80);
-	emit_u32(code, (int32_t)(offsetof(JanetStringHead, length) - offsetof(JanetStringHead, data)));
-	emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
+        // mov eax, rax + length_offset
+        emit_byte(code, 0x8B);
+        emit_byte(code, 0x80);
+        emit_u32(code, (int32_t)(offsetof(JanetStringHead, length) - offsetof(JanetStringHead, data)));
+        emit_gpr_to_number_op(code, &blocks->vregs[instr->result], 0);
       } else { // TODO: more type special cases here
-	emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
-	emit_cfun_call(code, blocks, instr, janet_lengthv);
-	emit_rax_to_op(code, &blocks->vregs[instr->result]);
+        emit_op_to_arg(code, 0, &blocks->vregs[instr->args[0]]);
+        emit_cfun_call(code, blocks, instr, janet_lengthv);
+        emit_rax_to_op(code, &blocks->vregs[instr->result]);
       }
       break;
     }
@@ -3869,33 +3869,33 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
       break;
     case HIR_GREATER_THAN_EQUAL: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->vregs[instr->args[1]])) {
-	emit_comparison(code,
-			&blocks->vregs[instr->args[0]],
-			&blocks->vregs[instr->args[1]],
-			false,
-			X86_CMOV_ABOVE_EQUAL,
-			-1,
-			&blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->vregs[instr->args[1]])) {
+        emit_comparison(code,
+                        &blocks->vregs[instr->args[0]],
+                        &blocks->vregs[instr->args[1]],
+                        false,
+                        X86_CMOV_ABOVE_EQUAL,
+                        -1,
+                        &blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_greater_than_equal_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_greater_than_equal_fallback);
       }
       break;
     }
     case HIR_LESS_THAN_EQUAL: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->vregs[instr->args[1]])) {
-	emit_comparison(code,
-			&blocks->vregs[instr->args[0]],
-			&blocks->vregs[instr->args[1]],
-			true,
-			X86_CMOV_ABOVE_EQUAL,
-			-1,
-			&blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->vregs[instr->args[1]])) {
+        emit_comparison(code,
+                        &blocks->vregs[instr->args[0]],
+                        &blocks->vregs[instr->args[1]],
+                        true,
+                        X86_CMOV_ABOVE_EQUAL,
+                        -1,
+                        &blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_less_than_equal_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_less_than_equal_fallback);
       }
       break;
     }
@@ -3908,33 +3908,33 @@ void emit_block(CodeBuffer *code, MethodBlocks *blocks, uint32_t stack_size, uin
     }
     case HIR_NOT_EQUALS: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->vregs[instr->args[1]])) {
-	emit_comparison(code,
-			&blocks->vregs[instr->args[0]],
-			&blocks->vregs[instr->args[1]],
-			false,
-			X86_CMOV_NOT_EQUAL,
-			true,
-			&blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->vregs[instr->args[1]])) {
+        emit_comparison(code,
+                        &blocks->vregs[instr->args[0]],
+                        &blocks->vregs[instr->args[1]],
+                        false,
+                        X86_CMOV_NOT_EQUAL,
+                        true,
+                        &blocks->vregs[instr->result]);
       } else {
-	emit_binary_fallback(code, blocks, instr, jit_not_equals_fallback);
+        emit_binary_fallback(code, blocks, instr, jit_not_equals_fallback);
       }
       break;
     }
     case HIR_NOT_EQUALS_IMM: {
       if (operands_numeric(blocks->virtual_register_types,
-			   &blocks->vregs[instr->args[0]],
-			   &blocks->imms[instr->args[1]])) {
-	emit_comparison(code,
-			&blocks->vregs[instr->args[0]],
-			&blocks->imms[instr->args[1]],
-			false,
-			X86_CMOV_NOT_EQUAL,
-			true,
-			&blocks->vregs[instr->result]);
+                           &blocks->vregs[instr->args[0]],
+                           &blocks->imms[instr->args[1]])) {
+        emit_comparison(code,
+                        &blocks->vregs[instr->args[0]],
+                        &blocks->imms[instr->args[1]],
+                        false,
+                        X86_CMOV_NOT_EQUAL,
+                        true,
+                        &blocks->vregs[instr->result]);
       } else {
-	emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_not_equals_fallback);
+        emit_binary_imm_fallback(code, blocks, instr, &blocks->imms[instr->args[1]], jit_not_equals_fallback);
       }
       break;
     }
@@ -3987,11 +3987,11 @@ static void compile(JittedFunction *jitted) {
   }
 
   void * mapping = mmap(NULL,
-			code.count,
-			PROT_READ | PROT_WRITE,
-			MAP_PRIVATE | MAP_ANONYMOUS,
-			-1,
-			0);
+                        code.count,
+                        PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS,
+                        -1,
+                        0);
 
   if (mapping == MAP_FAILED) {
     int error = errno;
@@ -4127,31 +4127,31 @@ static Janet jitted_janet_hir(JittedFunction *jitted) {
     for (size_t instr_i = 0; instr_i < block->count; instr_i++) {
       Instruction *instr = &block->instructions[instr_i];
       if (instr->type == HIR_PHI) {
-	JanetTable *janet_instr = janet_table(5 + instr->phi_source_count);
-	janet_table_put(janet_instr, janet_ckeywordv("type"), janet_ckeywordv(instruction_names[instr->type]));
-	janet_table_put(janet_instr, janet_ckeywordv("result"), jitted_op_tuple(&blocks->vregs[instr->result]));
+        JanetTable *janet_instr = janet_table(5 + instr->phi_source_count);
+        janet_table_put(janet_instr, janet_ckeywordv("type"), janet_ckeywordv(instruction_names[instr->type]));
+        janet_table_put(janet_instr, janet_ckeywordv("result"), jitted_op_tuple(&blocks->vregs[instr->result]));
 
-	Janet *janet_args = janet_tuple_begin(3);
-	janet_args[0] = janet_ckeywordv("TODO");
+        Janet *janet_args = janet_tuple_begin(3);
+        janet_args[0] = janet_ckeywordv("TODO");
 
-	janet_table_put(janet_instr, janet_ckeywordv("args"), janet_wrap_tuple(janet_tuple_end(janet_args)));
-	for (size_t i = 0; i < instr->phi_source_count; i++) {
-	  PhiSource *source = &instr->phi_sources[i];
-	  janet_table_put(janet_instr, janet_wrap_number(source->bb), jitted_op_tuple(&blocks->vregs[source->virtual_register]));
-	}
-	janet_bb_instrs[instr_i] = janet_wrap_struct(janet_table_to_struct(janet_instr));
+        janet_table_put(janet_instr, janet_ckeywordv("args"), janet_wrap_tuple(janet_tuple_end(janet_args)));
+        for (size_t i = 0; i < instr->phi_source_count; i++) {
+          PhiSource *source = &instr->phi_sources[i];
+          janet_table_put(janet_instr, janet_wrap_number(source->bb), jitted_op_tuple(&blocks->vregs[source->virtual_register]));
+        }
+        janet_bb_instrs[instr_i] = janet_wrap_struct(janet_table_to_struct(janet_instr));
       } else {
-	JanetTable *janet_instr = janet_table(5);
-	janet_table_put(janet_instr, janet_ckeywordv("type"), janet_ckeywordv(instruction_names[instr->type]));
-	janet_table_put(janet_instr, janet_ckeywordv("result"), jitted_op_tuple(&blocks->vregs[instr->result]));
+        JanetTable *janet_instr = janet_table(5);
+        janet_table_put(janet_instr, janet_ckeywordv("type"), janet_ckeywordv(instruction_names[instr->type]));
+        janet_table_put(janet_instr, janet_ckeywordv("result"), jitted_op_tuple(&blocks->vregs[instr->result]));
 
-	Janet *janet_args = janet_tuple_begin(3);
-	janet_args[0] = jitted_op_tuple(instruction_arg(blocks, instr, 0));
-	janet_args[1] = jitted_op_tuple(instruction_arg(blocks, instr, 1));
-	janet_args[2] = jitted_op_tuple(instruction_arg(blocks, instr, 2));
+        Janet *janet_args = janet_tuple_begin(3);
+        janet_args[0] = jitted_op_tuple(instruction_arg(blocks, instr, 0));
+        janet_args[1] = jitted_op_tuple(instruction_arg(blocks, instr, 1));
+        janet_args[2] = jitted_op_tuple(instruction_arg(blocks, instr, 2));
 
-	janet_table_put(janet_instr, janet_ckeywordv("args"), janet_wrap_tuple(janet_tuple_end(janet_args)));
-	janet_bb_instrs[instr_i] = janet_wrap_struct(janet_table_to_struct(janet_instr));
+        janet_table_put(janet_instr, janet_ckeywordv("args"), janet_wrap_tuple(janet_tuple_end(janet_args)));
+        janet_bb_instrs[instr_i] = janet_wrap_struct(janet_table_to_struct(janet_instr));
       }
     }
     janet_bbs[block_i] = janet_wrap_tuple(janet_tuple_end(janet_bb_instrs));
@@ -4189,8 +4189,8 @@ static Janet jitted_function_call(void *p, int32_t argc, Janet *argv) {
   if (argc == jitted->signature_argc) {
     for (int i = 0; i < argc; i++) {
       if (janet_type(argv[i]) != jitted->signature_arg_types[i]) {
-	return handle_mismatch(jitted, argc, argv);
-	janet_panic("mismatching signature!");
+        return handle_mismatch(jitted, argc, argv);
+        janet_panic("mismatching signature!");
       }
     }
     Janet res = ((JitFn)jitted->code)(argv, &jitted->ca);
